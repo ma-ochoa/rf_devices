@@ -9,6 +9,8 @@
   ventiladores, persianas, interruptores y botones, capturados y gestionados desde un panel visual.
 </p>
 
+<p align="center"><a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=ma-ochoa&repository=rf_devices&category=integration"><img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Abrir en HACS"></a></p>
+
 <p align="center"><a href="../README.md">English</a> · <b>Español</b></p>
 
 ---
@@ -67,6 +69,10 @@ crecer:
 ## Instalación
 
 ### HACS (recomendado)
+
+[![Abre tu Home Assistant y este repositorio en HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ma-ochoa&repository=rf_devices&category=integration)
+
+O a mano:
 
 1. HACS → ⋮ → **Repositorios personalizados** → añade `https://github.com/ma-ochoa/rf_devices`,
    tipo **Integración**.

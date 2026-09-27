@@ -15,6 +15,8 @@
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT">
 </p>
 
+<p align="center"><a href="https://my.home-assistant.io/redirect/hacs_repository/?owner=ma-ochoa&repository=rf_devices&category=integration"><img src="https://my.home-assistant.io/badges/hacs_repository.svg" alt="Open in HACS"></a></p>
+
 <p align="center"><b>English</b> · <a href="docs/README.es.md">Español</a></p>
 
 ---
@@ -68,6 +70,10 @@ It has only been tested with the devices in the first column. The code is built 
 ## Installation
 
 ### HACS (recommended)
+
+[![Open your Home Assistant instance and open this repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ma-ochoa&repository=rf_devices&category=integration)
+
+Or by hand:
 
 1. HACS → ⋮ → **Custom repositories** → add `https://github.com/ma-ochoa/rf_devices`, type
    **Integration**.

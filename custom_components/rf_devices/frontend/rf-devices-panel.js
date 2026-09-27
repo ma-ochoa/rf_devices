@@ -1126,8 +1126,9 @@ class RFDevicesPanel extends HTMLElement {
         const slots = slotsFor(d);
         const split = d.type === "fan" && this.hasLight(d);
         const chips = split
-          ? `🌀 ${chipsOf(slots.filter((x) => !x.role.startsWith("light_")))}<br>💡 ${chipsOf(slots.filter((x) => x.role.startsWith("light_")))}`
-          : chipsOf(slots);
+          ? `<div class="chips"><span class="chip-group">🌀</span>${chipsOf(slots.filter((x) => !x.role.startsWith("light_")))}</div>
+             <div class="chips"><span class="chip-group">💡</span>${chipsOf(slots.filter((x) => x.role.startsWith("light_")))}</div>`
+          : `<div class="chips">${chipsOf(slots)}</div>`;
         const lightEnts = new Set(d.light_entities || []);
         const entLine = (list) => list.map(esc).join(", ");
         const ents = !d.entities?.length ? ""
@@ -1137,7 +1138,7 @@ class RFDevicesPanel extends HTMLElement {
         return `<div class="card">
           <div class="card-head"><span class="icon">${TYPE_ICONS[d.type] || "📡"}</span>
             <div><div class="name">${esc(this.remoteTitle(d))}</div><div class="sub">${esc(this.remoteKind(d))}</div></div></div>
-          <div class="chips">${chips}</div>
+          ${chips}
           <div class="lives" data-live="${d.id}">${this.liveInfo(d)}</div>
           ${ents}
           <div class="actions">
@@ -2163,7 +2164,7 @@ section h2, .dialog h2 { font-size:17px; font-weight:500; margin:0 0 12px; }
 .name { font-size:16px; font-weight:500; }
 .sub { color:var(--secondary-text-color); font-size:13px; }
 .mono { font-family:monospace; word-break:break-all; }
-.chips { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0; }
+.chips { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:12px 0; }
 .chip { font-size:12px; padding:2px 8px; border-radius:10px; border:1px solid var(--divider-color); }
 .chip.ok { background:rgba(67,160,71,.15); border-color:rgba(67,160,71,.5); }
 .chip.warn { background:rgba(255,152,0,.18); border-color:rgba(255,152,0,.6); }
@@ -2207,6 +2208,7 @@ section h2, .dialog h2 { font-size:17px; font-weight:500; margin:0 0 12px; }
 .live h2 { font-size:16px; margin:0 0 8px; }
 .live h3, .live-inline h3 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--secondary-text-color); margin:12px 0 6px; }
 .lcard { border:1px solid var(--divider-color); border-radius:10px; padding:10px; margin-bottom:8px; }
+.chip-group { align-self:center; }
 .devlinks { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:10px; }
 .devlinks b { width:100%; font-size:.9em; }
 .devlinks small { width:100%; color:var(--secondary-text-color); }

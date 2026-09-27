@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.1
+
+- Panel: fan and light button chips grouped on their own lines in the device list.
+- README: one-click "Open in HACS" button.
+
 ## 0.10.0 — first public release
 
 - Visual panel to learn, clean, test, export and import Broadlink RF codes.
