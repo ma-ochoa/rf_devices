@@ -1,0 +1,51 @@
+set_state:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rf_devices
+          domain:
+            - light
+            - switch
+            - fan
+          multiple: true
+    is_on:
+      required: true
+      selector:
+        boolean:
+    percentage:
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+set_position_state:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rf_devices
+          domain: cover
+          multiple: true
+    position:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+set_color_mode:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rf_devices
+          domain: select
+          multiple: true
+    option:
+      required: true
+      selector:
+        text:

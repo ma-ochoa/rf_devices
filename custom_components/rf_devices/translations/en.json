@@ -1,0 +1,137 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "RF Devices",
+        "description": "Choose the Broadlink remote that will send and learn RF codes. Devices are created afterwards from the RF Devices panel in the sidebar.",
+        "data": {
+          "transmitter": "Broadlink remote"
+        }
+      }
+    },
+    "error": {
+      "not_found": "Entity not found"
+    },
+    "abort": {
+      "single_instance_allowed": "RF Devices is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "transmitter": "Default Broadlink remote",
+          "min_interval": "Minimum pause between transmissions",
+          "power_switch": "Smart plug powering the Broadlink (optional)"
+        },
+        "data_description": {
+          "min_interval": "Toggle-only receivers may read two bursts sent too close together as one long press.",
+          "power_switch": "If the Broadlink stops answering after a capture, RF Devices switches this plug off for 10 s and back on."
+        }
+      }
+    }
+  },
+  "entity": {
+    "light": {
+      "fan_light": {
+        "name": "Light"
+      }
+    },
+    "button": {
+      "sync": {
+        "name": "Sync"
+      },
+      "sync_fan": {
+        "name": "Sync fan"
+      },
+      "sync_fan_light": {
+        "name": "Sync light"
+      },
+      "timer": {
+        "name": "Timer {label}"
+      },
+      "light_color": {
+        "name": "Light colour"
+      },
+      "light_up": {
+        "name": "Brighter"
+      },
+      "light_down": {
+        "name": "Dimmer"
+      }
+    },
+    "sensor": {
+      "power": {
+        "name": "Power draw"
+      },
+      "estimate": {
+        "name": "Detected state",
+        "state": {
+          "off": "Off",
+          "light": "Light",
+          "fan": "Fan",
+          "fan_light": "Fan and light",
+          "unknown": "Unknown"
+        }
+      }
+    },
+    "binary_sensor": {
+      "powered": {
+        "name": "Power supply"
+      }
+    },
+    "select": {
+      "color": {
+        "name": "Colour temperature"
+      }
+    }
+  },
+  "services": {
+    "set_state": {
+      "name": "Set assumed state",
+      "description": "Correct the state Home Assistant assumes without transmitting anything (e.g. after using the original remote).",
+      "fields": {
+        "is_on": {
+          "name": "On",
+          "description": "Whether the device is on."
+        },
+        "percentage": {
+          "name": "Percentage",
+          "description": "Fan speed (fans only)."
+        },
+        "entity_id": {
+          "name": "Entity",
+          "description": "RF Devices entities."
+        }
+      }
+    },
+    "set_position_state": {
+      "name": "Set assumed position",
+      "description": "Correct the estimated cover position without transmitting anything.",
+      "fields": {
+        "position": {
+          "name": "Position",
+          "description": "0 = closed, 100 = open."
+        },
+        "entity_id": {
+          "name": "Entity",
+          "description": "RF Devices entities."
+        }
+      }
+    },
+    "set_color_mode": {
+      "name": "Set colour mode without sending",
+      "description": "Tell RF Devices which colour mode the lamp is really in, without transmitting (to re-align it after using the original remote).",
+      "fields": {
+        "entity_id": {
+          "name": "Entity",
+          "description": "RF Devices colour-temperature selectors."
+        },
+        "option": {
+          "name": "Mode",
+          "description": "Name of the mode the lamp is in."
+        }
+      }
+    }
+  }
+}

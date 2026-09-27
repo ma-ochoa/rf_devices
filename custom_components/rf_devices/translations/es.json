@@ -1,0 +1,137 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "RF Devices",
+        "description": "Elige el mando Broadlink que enviará y aprenderá los códigos RF. Los dispositivos se crean después desde el panel RF Devices de la barra lateral.",
+        "data": {
+          "transmitter": "Mando Broadlink"
+        }
+      }
+    },
+    "error": {
+      "not_found": "No se encuentra la entidad"
+    },
+    "abort": {
+      "single_instance_allowed": "RF Devices ya está configurado."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "transmitter": "Mando Broadlink por defecto",
+          "min_interval": "Pausa mínima entre envíos",
+          "power_switch": "Enchufe inteligente del Broadlink (opcional)"
+        },
+        "data_description": {
+          "min_interval": "Los receptores de botón único pueden tomar dos ráfagas muy seguidas como una pulsación larga.",
+          "power_switch": "Si el Broadlink deja de responder tras una captura, RF Devices apaga este enchufe 10 s y lo vuelve a encender."
+        }
+      }
+    }
+  },
+  "entity": {
+    "light": {
+      "fan_light": {
+        "name": "Luz"
+      }
+    },
+    "button": {
+      "sync": {
+        "name": "Sincronizar"
+      },
+      "sync_fan": {
+        "name": "Sincronizar ventilador"
+      },
+      "sync_fan_light": {
+        "name": "Sincronizar luz"
+      },
+      "timer": {
+        "name": "Temporizador {label}"
+      },
+      "light_color": {
+        "name": "Color de la luz"
+      },
+      "light_up": {
+        "name": "Subir luz"
+      },
+      "light_down": {
+        "name": "Bajar luz"
+      }
+    },
+    "sensor": {
+      "power": {
+        "name": "Consumo"
+      },
+      "estimate": {
+        "name": "Estado detectado",
+        "state": {
+          "off": "Apagado",
+          "light": "Luz",
+          "fan": "Ventilador",
+          "fan_light": "Ventilador y luz",
+          "unknown": "Desconocido"
+        }
+      }
+    },
+    "binary_sensor": {
+      "powered": {
+        "name": "Corriente"
+      }
+    },
+    "select": {
+      "color": {
+        "name": "Temperatura de color"
+      }
+    }
+  },
+  "services": {
+    "set_state": {
+      "name": "Fijar estado asumido",
+      "description": "Corrige el estado que supone Home Assistant sin transmitir nada (p. ej. tras usar el mando original).",
+      "fields": {
+        "is_on": {
+          "name": "Encendido",
+          "description": "Si el dispositivo está encendido."
+        },
+        "percentage": {
+          "name": "Porcentaje",
+          "description": "Velocidad del ventilador (solo ventiladores)."
+        },
+        "entity_id": {
+          "name": "Entidad",
+          "description": "Entidades de RF Devices."
+        }
+      }
+    },
+    "set_position_state": {
+      "name": "Fijar posición asumida",
+      "description": "Corrige la posición estimada de la persiana sin transmitir nada.",
+      "fields": {
+        "position": {
+          "name": "Posición",
+          "description": "0 = cerrada, 100 = abierta."
+        },
+        "entity_id": {
+          "name": "Entidad",
+          "description": "Entidades de RF Devices."
+        }
+      }
+    },
+    "set_color_mode": {
+      "name": "Fijar modo de color sin enviar",
+      "description": "Indica a RF Devices en qué modo de color está realmente la lámpara, sin transmitir (para realinearlo tras usar el mando original).",
+      "fields": {
+        "entity_id": {
+          "name": "Entidad",
+          "description": "Selectores de temperatura de color de RF Devices."
+        },
+        "option": {
+          "name": "Modo",
+          "description": "Nombre del modo en que está la lámpara."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+
+# Internal development notes and local context (never published)
+.internal/
+*.local.md
+CLAUDE.md
+.claude/
+
+# Local secrets and editor files
+.env
+.env.*
+*.log
+.vscode/
+.idea/

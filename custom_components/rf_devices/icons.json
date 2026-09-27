@@ -1,0 +1,13 @@
+{
+  "services": {
+    "set_state": {
+      "service": "mdi:sync"
+    },
+    "set_position_state": {
+      "service": "mdi:window-shutter-cog"
+    },
+    "set_color_mode": {
+      "service": "mdi:palette"
+    }
+  }
+}

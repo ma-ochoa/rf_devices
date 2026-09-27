@@ -1,0 +1,15 @@
+{
+  "domain": "rf_devices",
+  "name": "RF Devices",
+  "after_dependencies": ["broadlink"],
+  "codeowners": ["@ma-ochoa"],
+  "config_flow": true,
+  "dependencies": ["frontend", "http", "panel_custom", "websocket_api"],
+  "documentation": "https://github.com/ma-ochoa/rf_devices",
+  "integration_type": "hub",
+  "iot_class": "assumed_state",
+  "issue_tracker": "https://github.com/ma-ochoa/rf_devices/issues",
+  "requirements": ["broadlink>=0.19.0"],
+  "single_config_entry": true,
+  "version": "0.10.0"
+}
