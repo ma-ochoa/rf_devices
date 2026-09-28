@@ -3,9 +3,9 @@
     "step": {
       "user": {
         "title": "RF Devices",
-        "description": "Choose the Broadlink remote that will send and learn RF codes. Devices are created afterwards from the RF Devices panel in the sidebar.",
+        "description": "Choose the transmitter that will send and learn RF codes: a Broadlink remote or a radio_frequency entity (Home Assistant 2026.5+, e.g. an ESPHome RF proxy). Devices are created afterwards from the RF Devices panel in the sidebar.",
         "data": {
-          "transmitter": "Broadlink remote"
+          "transmitter": "RF transmitter"
         }
       }
     },
@@ -20,9 +20,9 @@
     "step": {
       "init": {
         "data": {
-          "transmitter": "Default Broadlink remote",
+          "transmitter": "Default RF transmitter",
           "min_interval": "Minimum pause between transmissions",
-          "power_switch": "Smart plug powering the Broadlink (optional)"
+          "power_switch": "Smart plug powering the Broadlink (optional, Broadlink only)"
         },
         "data_description": {
           "min_interval": "Toggle-only receivers may read two bursts sent too close together as one long press.",

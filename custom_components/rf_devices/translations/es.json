@@ -3,9 +3,9 @@
     "step": {
       "user": {
         "title": "RF Devices",
-        "description": "Elige el mando Broadlink que enviará y aprenderá los códigos RF. Los dispositivos se crean después desde el panel RF Devices de la barra lateral.",
+        "description": "Elige el emisor que enviará y aprenderá los códigos RF: un mando Broadlink o una entidad radio_frequency (Home Assistant 2026.5+, por ejemplo un proxy RF de ESPHome). Los dispositivos se crean después desde el panel RF Devices de la barra lateral.",
         "data": {
-          "transmitter": "Mando Broadlink"
+          "transmitter": "Emisor RF"
         }
       }
     },
@@ -20,9 +20,9 @@
     "step": {
       "init": {
         "data": {
-          "transmitter": "Mando Broadlink por defecto",
+          "transmitter": "Emisor RF por defecto",
           "min_interval": "Pausa mínima entre envíos",
-          "power_switch": "Enchufe inteligente del Broadlink (opcional)"
+          "power_switch": "Enchufe inteligente del Broadlink (opcional, solo Broadlink)"
         },
         "data_description": {
           "min_interval": "Los receptores de botón único pueden tomar dos ráfagas muy seguidas como una pulsación larga.",

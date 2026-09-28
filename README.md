@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/hacs/integration"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5.svg" alt="HACS"></a>
-  <img src="https://img.shields.io/badge/Home%20Assistant-2026.3%2B-blue.svg" alt="Home Assistant 2026.3+">
+  <img src="https://img.shields.io/badge/Home%20Assistant-2026.5%2B-blue.svg" alt="Home Assistant 2026.5+">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT">
 </p>
 
@@ -24,7 +24,7 @@
 ## What it gives you
 
 You have a ceiling fan, a lamp or a blind with a **433/315 MHz RF remote**, and a **Broadlink**
-that can send RF. RF Devices lets you:
+that can send RF, or an **ESPHome RF proxy** such as the Athom/IoTorero RF-IR remote. RF Devices lets you:
 
 - **Capture every button from a panel** in the sidebar: no YAML, no `remote.learn_command`, no
   searching for codes in `.storage`.
@@ -51,20 +51,25 @@ that can send RF. RF Devices lets you:
 | Role | Tested with | Should also work with |
 |---|---|---|
 | RF transmitter / learner | **Broadlink RM Pro+** (433 MHz) | Other RF-capable Broadlink models supported by the core integration (RM Pro, RM4 Pro…) |
+| RF transmitter / learner (test build) | Not yet tested on real hardware | **Athom / IoTorero RF433-IR remote** (ESP32, ESPHome, firmware 3.0.8+); any ESPHome `ir_rf_proxy` with an RF transmitter and receiver; any `radio_frequency` entity (send only) |
 | Relay, meter and wall switch | **Shelly Plus 2PM** (Gen2, local RPC) | Other Shelly Gen2+ relays; any relay/switch entity through the generic adapter |
 
 It has only been tested with the devices in the first column. The code is built to grow:
-- **Transmitters** go through Home Assistant's `remote` entity and a small learning layer, so
-  other RF transmitters can be added.
+- **Transmitters** go through adapters (`transmitters/`): a `remote` entity (Broadlink) or a
+  `radio_frequency` entity (any RF adapter Home Assistant supports, such as ESPHome).
 - **Relays** go through adapters (`relays/`). Sonoff, Tuya or other relays and wall-switch modules
   similar to Shelly can get vendor-specific features (live power, detaching the switch, scripts)
   by adding one module.
 
 ## Requirements
 
-- Home Assistant **2026.3** or newer (tested on 2026.9).
-- The core **Broadlink** integration set up with an RF-capable model. RF Devices sends through
-  its `remote` entity and uses its connection to learn.
+- Home Assistant **2026.5** or newer (tested on 2026.9).
+- A transmitter, one of:
+  - the core **Broadlink** integration with an RF-capable model. RF Devices sends through its
+    `remote` entity and uses its connection to learn;
+  - an **ESPHome** device with the `ir_rf_proxy` RF platform, which gives Home Assistant a
+    `radio_frequency` entity. RF Devices sends raw timings through it and, when the device also
+    has an `ir_rf_proxy` RF receiver, learns from it (see [ESPHome RF proxy](#esphome-rf-proxy-iotorero)).
 - Optional: a smart relay (e.g. Shelly) feeding the device, with a power meter and a wall switch.
 
 ## Installation
@@ -237,6 +242,35 @@ If it stops answering, a notification tells you. With a smart plug configured, R
 power-cycle it for you. All transmissions go through a queue with a configurable gap, per
 device if needed.
 
+## ESPHome RF proxy (IoTorero)
+
+Test build: it has not been tried on real hardware yet. Feedback in the issues is welcome.
+
+1. Add the device with the ESPHome integration. On the Athom / IoTorero RF433-IR remote, update
+   it to firmware **3.0.8 or newer** from its *Firmware Update* entity: that firmware already
+   declares the `ir_rf_proxy` RF transmitter and receiver. For your own ESPHome config:
+   ```yaml
+   radio_frequency:
+     - platform: ir_rf_proxy
+       name: 433MHz RF Transmitter
+       frequency: 433.92MHz
+       remote_transmitter_id: rf_transmitter
+     - platform: ir_rf_proxy
+       name: 433MHz RF Receiver
+       frequency: 433.92MHz
+       remote_receiver_id: rf_receiver
+   ```
+2. Choose the `radio_frequency.…_433mhz_rf_transmitter` entity as the transmitter (in the RF
+   Devices options, or per device).
+3. Capture: there is no frequency sweep. Press the button once, holding it for about a second.
+   The receiver's bursts are joined, noise is dropped and the result is cleaned like a
+   Broadlink capture.
+
+Codes are still stored in the Broadlink format, so they can be moved between a Broadlink and an
+ESPHome transmitter. Only fixed-code 433.92 MHz OOK remotes work with these receivers (no
+rolling codes). With debug logs on, every received burst is logged: attach them to an issue if a
+capture fails.
+
 ## Import, export and existing codes
 
 - **Export / import** all devices (or some) as a JSON file, to move them to another
@@ -281,6 +315,12 @@ device if needed.
   live power, detach or script).
 - Tested only with the hardware listed above.
 
+## Extending: other transmitters
+
+Transmitters live in `custom_components/rf_devices/transmitters/`. Subclass `Transmitter`
+(`base.py`), implement `async_send` and, if it can learn, `learn_problem` and `async_learn`, and
+map its entity domain in `TRANSMITTERS` (`__init__.py`).
+
 ## Extending: other relays
 
 Relay support lives in `custom_components/rf_devices/relays/`. Any relay Home Assistant can
@@ -297,7 +337,7 @@ switch works through `generic.py`. To add vendor features:
 
 ```bash
 uv venv -p 3.14 .venv
-uv pip install -p .venv/bin/python pytest-homeassistant-custom-component broadlink==0.19.0 ruff
+uv pip install -p .venv/bin/python pytest-homeassistant-custom-component broadlink==0.19.0 rf-protocols aioesphomeapi ruff
 .venv/bin/ruff check custom_components tests --select E,F,W,I,B,UP --ignore E501
 .venv/bin/pytest
 ```

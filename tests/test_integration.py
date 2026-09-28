@@ -298,7 +298,7 @@ async def test_learn_cancel_stops_sweep(hass: HomeAssistant, setup, hass_ws_clie
 
 
 async def test_learn_press_timeout_exits_learning(hass: HomeAssistant, setup, hass_ws_client, monkeypatch) -> None:
-    monkeypatch.setattr("custom_components.rf_devices.hub.LEARN_TIMEOUT", 1)
+    monkeypatch.setattr("custom_components.rf_devices.transmitters.remote.LEARN_TIMEOUT", 1)
     api = MagicMock()
     api.check_data.side_effect = ReadError(-5, "no data")
     _fake_broadlink(hass, api)
@@ -373,9 +373,9 @@ async def test_no_transmission_during_capture(hass: HomeAssistant, setup, hass_w
 
 async def test_power_cycle_when_broadlink_hangs(hass: HomeAssistant, setup, monkeypatch) -> None:
     for name in ("HEALTH_DELAY", "POWER_OFF_TIME"):
-        monkeypatch.setattr(f"custom_components.rf_devices.hub.{name}", 0)
-    monkeypatch.setattr("custom_components.rf_devices.hub.POWER_BOOT_TIME", 5)
-    monkeypatch.setattr("custom_components.rf_devices.hub.asyncio.sleep", _no_sleep)
+        monkeypatch.setattr(f"custom_components.rf_devices.transmitters.remote.{name}", 0)
+    monkeypatch.setattr("custom_components.rf_devices.transmitters.remote.POWER_BOOT_TIME", 5)
+    monkeypatch.setattr("custom_components.rf_devices.transmitters.remote.asyncio.sleep", _no_sleep)
     hass.config_entries.async_update_entry(
         setup.entry, options={**setup.entry.options, "power_switch": "switch.plug"}
     )
@@ -393,8 +393,8 @@ async def test_power_cycle_when_broadlink_hangs(hass: HomeAssistant, setup, monk
         return True
 
     api.hello.side_effect = hello
-    hub = setup.entry.runtime_data
-    await hub._async_after_learning(SimpleNamespace(api=api, async_request=_request))
+    tx = setup.entry.runtime_data.transmitter(TX)
+    await tx._async_after_learning(SimpleNamespace(api=api, async_request=_request))
     assert [c.data["entity_id"] for c in offs] == ["switch.plug"]
     assert [c.data["entity_id"] for c in ons] == ["switch.plug"]
     api.cancel_sweep_frequency.assert_called_once()
@@ -414,7 +414,7 @@ async def _request(func, *args):
 async def test_learn_tolerates_a_busy_broadlink(hass: HomeAssistant, setup, hass_ws_client, monkeypatch) -> None:
     from broadlink.exceptions import NetworkTimeoutError
 
-    monkeypatch.setattr("custom_components.rf_devices.hub.POLL_INTERVAL", 0.05)
+    monkeypatch.setattr("custom_components.rf_devices.transmitters.remote.POLL_INTERVAL", 0.05)
     api = MagicMock()
     answers = [NetworkTimeoutError(-4000, "busy"), ReadError(-5, "no data"), NetworkTimeoutError(-4000, "busy"),
                codec.encode(codec.decode(capture(BITS_A)))]

@@ -28,6 +28,7 @@ from .models import (
 from .relay import MODE_DETACHED, relay_mode
 from .relays import get_adapter
 from .store import async_read_broadlink_codes
+from .transmitters import DOMAINS as TRANSMITTER_DOMAINS
 
 
 @callback
@@ -118,14 +119,19 @@ def ws_info(hass, connection, msg) -> None:
     except LearnError as err:
         _error(connection, msg, err)
         return
-    transmitters = [
-        {
-            "entity_id": s.entity_id,
-            "name": s.name,
-            "can_learn": hub.can_learn(s.entity_id),
-        }
-        for s in hass.states.async_all("remote")
-    ]
+    transmitters = []
+    for state in hass.states.async_all(TRANSMITTER_DOMAINS):
+        tx = hub.transmitter(state.entity_id)
+        problem = tx.learn_problem()
+        transmitters.append(
+            {
+                "entity_id": state.entity_id,
+                "name": state.name,
+                "can_learn": problem is None,
+                "learn_problem": problem,
+                "sweeps": tx.sweeps,
+            }
+        )
     connection.send_result(
         msg["id"],
         {
@@ -226,7 +232,8 @@ def ws_learn(hass, connection, msg) -> None:
     try:
         hub = _hub(hass)
         transmitter = msg.get("transmitter") or hub.default_transmitter
-        hub._broadlink_device(transmitter)  # noqa: SLF001 - fail before subscribing
+        if (problem := hub.learn_problem(transmitter)) is not None:
+            raise LearnError(problem)  # fail before subscribing
     except LearnError as err:
         _error(connection, msg, err)
         return

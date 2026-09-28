@@ -139,6 +139,55 @@ def to_b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
 
+# Pause inserted between two received bursts when the receiver reports them
+# separately (it drops the silence that split them). ESPHome's default idle
+# threshold is 10 ms, so the real pause was at least that long.
+RECEIVED_GAP_US = 10000
+# Received bursts shorter than this are receiver noise, not a remote frame.
+MIN_RECEIVED_PULSES = 16
+
+
+def to_timings(code: str | bytes) -> tuple[list[int], int]:
+    """Signed microseconds (+on / −off) and repeat count, as HA's RF API wants them."""
+    packet = decode(code)
+    timings = [
+        round(p * TICK_US) * (1 if i % 2 == 0 else -1) for i, p in enumerate(packet.pulses)
+    ]
+    return timings, packet.repeat
+
+
+def from_timings(bursts: list[list[int]], kind: int = TYPE_RF433) -> str:
+    """Build a Broadlink packet (base64) from received signed-microsecond bursts.
+
+    A receiver may deliver a remote's burst of repeated frames as one list
+    or one list per frame; either way the result looks like a Broadlink
+    capture, so ``analyze``/``clean`` treat both alike. Leading silences
+    are skipped, consecutive values of the same sign are merged, and a
+    pause is put between bursts that ended on an "on" pulse.
+    """
+    pulses_us: list[int] = []
+    for burst in bursts:
+        on = True  # the next value we expect
+        for value in burst:
+            if value == 0:
+                continue
+            is_on = value > 0
+            if not pulses_us and not is_on:
+                continue  # a packet starts with "on"
+            if pulses_us and is_on != on:
+                # Same sign twice in a row: merge into the previous pulse.
+                pulses_us[-1] += abs(value)
+                continue
+            pulses_us.append(abs(value))
+            on = not is_on
+        if pulses_us and len(pulses_us) % 2 == 1:
+            pulses_us.append(RECEIVED_GAP_US)  # close the burst with its pause
+    if not pulses_us:
+        raise CodecError("Nothing was received")
+    ticks = [max(1, round(us / TICK_US)) for us in pulses_us]
+    return to_b64(encode(Packet(kind, 0, ticks)))
+
+
 def _describe(pulses: list[int]) -> tuple[str, str]:
     """Quantise pulses into short/long and read on-pulses as bits (long = 1)."""
     if not pulses:
@@ -274,3 +323,17 @@ def hold(code: str | bytes, seconds: float) -> str:
     repeat = -(-total // MAX_FRAMES_PER_PACKET) - 1
     per_packet = -(-total // (repeat + 1))
     return clean(code, frames=per_packet, repeat=repeat)
+
+
+def capture_result(code: str, frequency: float | None) -> dict:
+    """Raw capture, its analysis and the cleaned version the UI proposes."""
+    analysis = analyze(code)
+    cleaned = clean(code) if analysis["needs_cleaning"] else code
+    return {
+        "frequency": frequency,
+        "raw": code,
+        "raw_analysis": analysis,
+        "code": cleaned,
+        "analysis": analyze(cleaned),
+        "fingerprint": fingerprint(code),
+    }

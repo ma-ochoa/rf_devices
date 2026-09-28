@@ -1,4 +1,4 @@
-"""Config flow: pick the Broadlink remote that sends (and learns) the codes."""
+"""Config flow: pick the remote or radio_frequency entity that sends (and learns) the codes."""
 
 from __future__ import annotations
 
@@ -16,8 +16,9 @@ from .const import (
     DEFAULT_MIN_INTERVAL,
     DOMAIN,
 )
+from .transmitters import DOMAINS
 
-TRANSMITTER_SELECTOR = selector.EntitySelector(selector.EntitySelectorConfig(domain="remote"))
+TRANSMITTER_SELECTOR = selector.EntitySelector(selector.EntitySelectorConfig(domain=DOMAINS))
 
 
 class RFDevicesConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -32,7 +33,7 @@ class RFDevicesConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title="RF Devices", data=user_input)
 
         default = next(
-            (s.entity_id for s in self.hass.states.async_all("remote")), None
+            (s.entity_id for s in self.hass.states.async_all(DOMAINS)), None
         )
         return self.async_show_form(
             step_id="user",

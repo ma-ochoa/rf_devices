@@ -18,7 +18,7 @@ const I18N = {
     close: "Cerrar",
     name: "Nombre",
     type: "Tipo",
-    transmitter: "Emisor Broadlink",
+    transmitter: "Emisor RF",
     default_tx: "Por defecto ({name})",
     device: "Dispositivo",
     buttons: "Botones del mando",
@@ -188,7 +188,7 @@ const I18N = {
     d_meter: "Medidor",
     d_fan: "Ventilador + luz",
     d_light: "Luz",
-    d_rf: "Broadlink (RF)",
+    d_rf: "Emisor RF",
     color_kelvin: "Temperatura de cada modo (K)",
     color_kelvin_help: "Para regular la temperatura desde Home Assistant o Alexa. Por ejemplo: 6000, 4000, 2700.",
     dim_time: "Segundos manteniendo pulsado de mínimo a máximo brillo",
@@ -285,7 +285,8 @@ const I18N = {
     known_freq: "Usar la frecuencia ya conocida ({f} MHz): basta con una pulsación",
     capture_tip: "Acerca el mando a unos 10–20 cm del Broadlink. Primero se busca la señal manteniendo pulsado; después se pide una segunda pulsación.",
     start: "Empezar",
-    st_starting: "Preparando el Broadlink…",
+    capture_tip_rx: "Acerca el mando al receptor. Cuando se pida, pulsa el botón y mantenlo alrededor de un segundo.",
+    st_starting: "Preparando el emisor…",
     st_sweep: "Mantén pulsado el botón «{role}» del mando cerca del Broadlink hasta que se detecte la frecuencia.",
     st_frequency: "Frecuencia detectada: {f} MHz. Suelta el botón.",
     st_found: "Señal detectada. Suelta el botón y espera.",
@@ -308,7 +309,8 @@ const I18N = {
     use: "Usar",
     import_done: "Importados {added}, sobrescritos {replaced}.",
     import_replace: "¿Sobrescribir los dispositivos que ya existan con el mismo identificador? (Cancelar = importarlos como copia)",
-    no_learn: "Este emisor no puede aprender RF (o la integración Broadlink no está cargada).",
+    no_learn: "Este emisor no puede aprender códigos: {msg}",
+    st_unreachable_rx: "El receptor no responde, así que no se ha empezado a capturar. Comprueba que el dispositivo esté conectado a Home Assistant.",
     frequency: "{f} MHz",
     entities: "Entidades",
   },
@@ -327,7 +329,7 @@ const I18N = {
     close: "Close",
     name: "Name",
     type: "Type",
-    transmitter: "Broadlink transmitter",
+    transmitter: "RF transmitter",
     default_tx: "Default ({name})",
     device: "Device",
     buttons: "Remote buttons",
@@ -497,7 +499,7 @@ const I18N = {
     d_meter: "Meter",
     d_fan: "Fan + light",
     d_light: "Light",
-    d_rf: "Broadlink (RF)",
+    d_rf: "RF transmitter",
     color_kelvin: "Colour temperature of each mode (K)",
     color_kelvin_help: "To set the temperature from Home Assistant or Alexa. E.g. 6000, 4000, 2700.",
     dim_time: "Seconds held from minimum to maximum brightness",
@@ -594,7 +596,8 @@ const I18N = {
     known_freq: "Use the known frequency ({f} MHz): a single press is enough",
     capture_tip: "Hold the remote 10–20 cm from the Broadlink. First the signal is found while you hold the button; then a second press is asked for.",
     start: "Start",
-    st_starting: "Preparing the Broadlink…",
+    capture_tip_rx: "Hold the remote close to the receiver. When asked, press the button and keep it pressed for about a second.",
+    st_starting: "Preparing the transmitter…",
     st_sweep: "Press and hold the “{role}” button close to the Broadlink until the frequency is found.",
     st_frequency: "Frequency found: {f} MHz. Release the button.",
     st_found: "Signal found. Release the button and wait.",
@@ -617,7 +620,8 @@ const I18N = {
     use: "Use",
     import_done: "Imported {added}, overwritten {replaced}.",
     import_replace: "Overwrite devices that already exist with the same id? (Cancel = import them as copies)",
-    no_learn: "This transmitter cannot learn RF (or the Broadlink integration is not loaded).",
+    no_learn: "This transmitter cannot learn codes: {msg}",
+    st_unreachable_rx: "The receiver is not answering, so capturing did not start. Check that the device is connected to Home Assistant.",
     frequency: "{f} MHz",
     entities: "Entities",
   },
@@ -965,7 +969,8 @@ class RFDevicesPanel extends HTMLElement {
   // ---------- learning ----------
   openLearn(role) {
     const tx = this._state.draft.transmitter || this._state.info.default_transmitter;
-    const freq = this._state.info.frequencies?.[tx];
+    const sweeps = this._state.info.transmitters.find((t) => t.entity_id === tx)?.sweeps ?? true;
+    const freq = sweeps ? this._state.info.frequencies?.[tx] : null;
     this._state.dialog = { kind: "learn", role, stage: "idle", useKnown: !!freq, knownFreq: freq, tx };
     this.render();
   }
@@ -1854,15 +1859,16 @@ class RFDevicesPanel extends HTMLElement {
     if (dlg.kind === "learn") {
       title = this.t("learn_title", { role });
       const tx = this._state.info.transmitters.find((t) => t.entity_id === dlg.tx);
-      if (tx && !tx.can_learn) body = `<p class="warn-text">${this.t("no_learn")}</p>`;
+      const sweeps = tx?.sweeps ?? true;
+      if (tx && !tx.can_learn) body = `<p class="warn-text">${esc(this.t("no_learn", { msg: tx.learn_problem || "" }))}</p>`;
       else if (dlg.stage === "idle") {
-        body = `<p class="sub">${this.t("capture_tip")}</p>${dlg.knownFreq ? `<label class="check"><input type="checkbox" id="use-known" ${dlg.useKnown ? "checked" : ""}> ${this.t("known_freq", { f: dlg.knownFreq })}</label>` : ""}
+        body = `<p class="sub">${this.t(sweeps ? "capture_tip" : "capture_tip_rx")}</p>${dlg.knownFreq ? `<label class="check"><input type="checkbox" id="use-known" ${dlg.useKnown ? "checked" : ""}> ${this.t("known_freq", { f: dlg.knownFreq })}</label>` : ""}
           <div class="actions"><span class="spacer"></span><button class="primary" data-action="start-learn">${this.t("start")}</button></div>`;
       } else if (dlg.stage === "captured") {
         body = this.renderResult(dlg.result, true, true);
       } else {
         let key = { starting: "st_starting", sweep: "st_sweep", frequency: "st_frequency", press: "st_press", timeout: "st_timeout", error: "st_error" }[dlg.stage];
-        if (dlg.stage === "error" && dlg.reason === "unreachable") key = "st_unreachable";
+        if (dlg.stage === "error" && dlg.reason === "unreachable") key = sweeps ? "st_unreachable" : "st_unreachable_rx";
         if (dlg.stage === "frequency" && !dlg.frequency) key = "st_found";
         const busy = ["starting", "sweep", "frequency", "press"].includes(dlg.stage);
         body = `<div class="stage ${busy ? "busy" : ""}">${busy ? '<div class="pulse"></div>' : ""}

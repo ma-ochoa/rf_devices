@@ -6,7 +6,7 @@ Stored device::
       "id": "a1b2c3",
       "name": "Luz cama",
       "type": "light",                 # light | switch | cover | fan | buttons
-      "transmitter": null,             # remote entity, null = the hub default
+      "transmitter": null,             # remote or radio_frequency entity, null = the hub default
       "options": {...},                # see OPTION_SCHEMAS
       "commands": {
         "toggle": {"code": "<base64>", "frequency": 433.92,

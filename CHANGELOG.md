@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.0-iotorero.1 (test build)
+
+- New: **`radio_frequency` transmitters** (Home Assistant 2026.5+). Codes are sent as raw timings
+  through the core RF helper, so any RF adapter Home Assistant supports can be used, such as an
+  ESPHome `ir_rf_proxy` (Athom / IoTorero RF433-IR remote, firmware 3.0.8+).
+- New: **learning with an ESPHome RF receiver**. No frequency sweep: one press is enough.
+  Received bursts are joined, noise is dropped and the capture is cleaned like a Broadlink one.
+- Transmitters are now adapters (`transmitters/`), like relays. The Broadlink behaviour
+  (learning, safeguards, power-cycling) is unchanged.
+- Codes are still stored in the Broadlink format and are converted when sent through a
+  `radio_frequency` entity.
+- Requires Home Assistant 2026.5 or newer.
+
 ## 0.11.8
 
 - Live calibration of the lamp: each time the lamp switches with the fan stopped, its real draw

@@ -48,21 +48,28 @@ Tienes un ventilador de techo, una lámpara o una persiana con **mando RF de 433
 | Función | Probado con | Debería funcionar también con |
 |---|---|---|
 | Emisor y aprendizaje RF | **Broadlink RM Pro+** (433 MHz) | Otros Broadlink con RF compatibles con la integración oficial (RM Pro, RM4 Pro…) |
+| Emisor y aprendizaje RF (versión de prueba) | Aún sin probar con hardware real | **Mando RF433-IR de Athom / IoTorero** (ESP32, ESPHome, firmware 3.0.8 o posterior); cualquier `ir_rf_proxy` de ESPHome con emisor y receptor RF; cualquier entidad `radio_frequency` (solo enviar) |
 | Relé, medidor e interruptor de pared | **Shelly Plus 2PM** (Gen2, RPC local) | Otros relés Shelly Gen2 o posteriores; cualquier relé o interruptor de HA mediante el adaptador genérico |
 
 Solo se ha probado con los dispositivos de la primera columna, pero el código está preparado para
 crecer:
-- **Emisores**: se usan a través de la entidad `remote` de Home Assistant y de una pequeña capa de
-  aprendizaje, así que se pueden añadir otros emisores RF.
+- **Emisores**: se usan a través de adaptadores (`transmitters/`): una entidad `remote`
+  (Broadlink) o una entidad `radio_frequency` (cualquier adaptador RF que admita Home Assistant,
+  como ESPHome).
 - **Relés**: se usan a través de adaptadores (`relays/`). Relés Sonoff, Tuya u otros módulos de
   interruptor y relé parecidos a Shelly pueden sumar funciones propias (consumo en directo,
   desacoplar el interruptor, scripts) añadiendo un único módulo.
 
 ## Requisitos
 
-- Home Assistant **2026.3** o posterior (probado en 2026.9).
-- La integración oficial **Broadlink** configurada con un modelo con RF. RF Devices emite a
-  través de su entidad `remote` y usa su conexión para aprender.
+- Home Assistant **2026.5** o posterior (probado en 2026.9).
+- Un emisor, uno de estos:
+  - la integración oficial **Broadlink** con un modelo con RF. RF Devices emite a través de su
+    entidad `remote` y usa su conexión para aprender;
+  - un dispositivo **ESPHome** con la plataforma RF `ir_rf_proxy`, que da a Home Assistant una
+    entidad `radio_frequency`. RF Devices envía por ella los tiempos de la trama y, si el
+    dispositivo tiene también un receptor RF `ir_rf_proxy`, aprende con él (ver
+    [Proxy RF de ESPHome](#proxy-rf-de-esphome-iotorero)).
 - Opcional: un relé inteligente (por ejemplo, un Shelly) que alimente el aparato, con medidor de
   consumo e interruptor de pared.
 
@@ -247,6 +254,36 @@ Si deja de responder, recibes un aviso. Con un enchufe inteligente configurado, 
 reiniciarlo. Todos los envíos pasan por una cola con una pausa configurable, también por
 dispositivo.
 
+## Proxy RF de ESPHome (IoTorero)
+
+Versión de prueba: todavía no se ha probado con hardware real. Se agradecen los comentarios en
+las incidencias.
+
+1. Añade el dispositivo con la integración ESPHome. En el mando RF433-IR de Athom / IoTorero,
+   actualízalo al firmware **3.0.8 o posterior** desde su entidad *Firmware Update*: ese firmware
+   ya declara el emisor y el receptor RF de `ir_rf_proxy`. Con tu propia configuración de ESPHome:
+   ```yaml
+   radio_frequency:
+     - platform: ir_rf_proxy
+       name: 433MHz RF Transmitter
+       frequency: 433.92MHz
+       remote_transmitter_id: rf_transmitter
+     - platform: ir_rf_proxy
+       name: 433MHz RF Receiver
+       frequency: 433.92MHz
+       remote_receiver_id: rf_receiver
+   ```
+2. Elige la entidad `radio_frequency.…_433mhz_rf_transmitter` como emisor (en las opciones de RF
+   Devices o en cada dispositivo).
+3. Captura: no hay barrido de frecuencia. Pulsa el botón una vez y mantenlo alrededor de un
+   segundo. Se juntan las ráfagas del receptor, se descarta el ruido y el resultado se limpia
+   igual que una captura del Broadlink.
+
+Los códigos se siguen guardando en formato Broadlink, así que pueden pasarse de un Broadlink a
+un emisor ESPHome y al revés. Con estos receptores solo funcionan mandos de código fijo a
+433,92 MHz con modulación OOK (no los de código variable). Con los registros de depuración
+activados se anota cada ráfaga recibida: adjúntalos a una incidencia si una captura falla.
+
 ## Importar, exportar y códigos existentes
 
 - **Exportar e importar** todos los dispositivos (o algunos) en un JSON para llevarlos a otra
@@ -292,6 +329,12 @@ dispositivo.
 - Los Shelly con contraseña solo se usan a través de sus entidades de Home Assistant: sin consumo
   en directo, sin desacoplar y sin script.
 - Solo se ha probado con el hardware indicado arriba.
+
+## Ampliar: otros emisores
+
+Los emisores están en `custom_components/rf_devices/transmitters/`. Crea una subclase de
+`Transmitter` (`base.py`), implementa `async_send` y, si puede aprender, `learn_problem` y
+`async_learn`, y asocia su dominio de entidad en `TRANSMITTERS` (`__init__.py`).
 
 ## Ampliar: otros relés
 
