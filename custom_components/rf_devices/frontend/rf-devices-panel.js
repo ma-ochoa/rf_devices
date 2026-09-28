@@ -7,6 +7,8 @@ const I18N = {
     title: "RF Devices",
     new_device: "Nuevo dispositivo",
     export: "Exportar",
+    debug_report: "Diagnóstico",
+    debug_report_help: "Descarga un informe para depurar a distancia: versiones, emisores, dispositivos ESPHome, entidades usadas, últimos envíos y capturas (con las ráfagas recibidas) y registro. No lleva contraseñas ni los códigos guardados; sí las ráfagas captadas durante las capturas.",
     import: "Importar",
     empty: "Aún no hay dispositivos. Crea uno y captura los botones de su mando.",
     edit: "Editar",
@@ -318,6 +320,8 @@ const I18N = {
     title: "RF Devices",
     new_device: "New device",
     export: "Export",
+    debug_report: "Diagnostics",
+    debug_report_help: "Downloads a report for remote debugging: versions, transmitters, ESPHome devices, entities in use, latest transmissions and captures (with the bursts received) and log. No passwords or stored codes; it does include the bursts received during captures.",
     import: "Import",
     empty: "No devices yet. Create one and capture the buttons of its remote.",
     edit: "Edit",
@@ -1096,6 +1100,20 @@ class RFDevicesPanel extends HTMLElement {
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
+  async downloadDebug() {
+    try {
+      const data = await this.ws({ type: "rf_devices/debug_report" });
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `rf_devices_debug_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    } catch (e) {
+      this.toast(e.message, true);
+    }
+  }
+
   async importFile(file) {
     try {
       const data = JSON.parse(await file.text());
@@ -1175,6 +1193,7 @@ class RFDevicesPanel extends HTMLElement {
         <button class="primary" data-action="new">＋ ${this.t("new_device")}</button>
         <button data-action="export">${this.t("export")}</button>
         <button data-action="import">${this.t("import")}</button>
+        <button data-action="debug-report" title="${esc(this.t("debug_report_help"))}">${this.t("debug_report")}</button>
         <input type="file" id="import-file" accept="application/json,.json" hidden>
       </div>
       ${devices.length ? `<div class="grid">${cards}</div>` : `<div class="empty">${this.t("empty")}</div>`}`;
@@ -2115,6 +2134,7 @@ class RFDevicesPanel extends HTMLElement {
       case "edit": return this.editDevice(el.dataset.id);
       case "delete": return this.deleteDevice(el.dataset.id);
       case "export": return this.exportAll();
+      case "debug-report": return this.downloadDebug();
       case "import": return this.shadowRoot.getElementById("import-file").click();
       case "tab":
         this._state.tab = el.dataset.tab;

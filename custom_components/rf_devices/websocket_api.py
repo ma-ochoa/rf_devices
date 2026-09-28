@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from . import codec
+from . import codec, debug
 from .calibration import async_calibrate, async_calibrate_light, read_watts
 from .const import DEVICE_TYPES, DOMAIN, MAX_SPEEDS, VERSION
 from .entity import find_by_unique_id
@@ -49,6 +49,7 @@ def async_register(hass: HomeAssistant) -> None:
         ws_relay_info,
         ws_relay_apply,
         ws_meter_live,
+        ws_debug_report,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -235,6 +236,7 @@ def ws_learn(hass, connection, msg) -> None:
         if (problem := hub.learn_problem(transmitter)) is not None:
             raise LearnError(problem)  # fail before subscribing
     except LearnError as err:
+        debug.trace(hass, "learn_refused", transmitter=msg.get("transmitter"), message=str(err))
         _error(connection, msg, err)
         return
 
@@ -751,3 +753,16 @@ def ws_meter_live(hass, connection, msg) -> None:
     connection.send_result(msg["id"])
     task = hass.async_create_background_task(run(), "rf_devices meter live")
     connection.subscriptions[msg["id"]] = task.cancel
+
+
+@websocket_api.websocket_command({vol.Required("type"): "rf_devices/debug_report"})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_debug_report(hass, connection, msg) -> None:
+    """Everything needed to debug remotely (see ``debug``), for the panel's download button."""
+    try:
+        hub = _hub(hass)
+    except LearnError as err:
+        _error(connection, msg, err)
+        return
+    connection.send_result(msg["id"], await debug.async_build_report(hass, hub))

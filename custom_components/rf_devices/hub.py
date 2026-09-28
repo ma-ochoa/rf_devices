@@ -12,7 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from . import codec
+from . import codec, debug
 from .codec import capture_result
 from .const import (
     CONF_MIN_INTERVAL,
@@ -71,10 +71,19 @@ class RFHub:
             wait = self._last_send + pause - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
+            started = time.monotonic()
+            error = None
             try:
                 await self.transmitter(entity_id).async_send(code)
+            except Exception as err:
+                error = f"{type(err).__name__}: {err}"
+                raise
             finally:
                 self._last_send = time.monotonic()
+                debug.trace(
+                    self.hass, "send", transmitter=entity_id, fingerprint=_fingerprint(code),
+                    took_ms=round((self._last_send - started) * 1000), error=error,
+                )
 
     def transmitter(self, entity_id: str | None = None) -> Transmitter:
         return get_transmitter(self.hass, self, entity_id or self.default_transmitter)
@@ -111,11 +120,38 @@ class RFHub:
             wait = self._last_learn + LEARN_COOLDOWN - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
+            debug.trace(self.hass, "learn_start", transmitter=tx.entity_id, frequency=frequency)
             try:
                 # Closing the inner generator runs its clean-up even when the
                 # UI unsubscribes while it is waiting at a yield.
                 async with aclosing(tx.async_learn(frequency)) as events:
                     async for event in events:
+                        debug.trace(self.hass, "learn_" + event.stage, **_learn_summary(event.data))
                         yield event
+            except BaseException as err:
+                debug.trace(self.hass, "learn_end", reason=type(err).__name__, message=str(err))
+                raise
             finally:
                 self._last_learn = time.monotonic()
+
+
+def _fingerprint(code: str) -> str | None:
+    try:
+        return codec.fingerprint(code)
+    except codec.CodecError:
+        return None
+
+
+def _learn_summary(data: dict) -> dict:
+    """What the trace keeps of a learning event: the codes, not the UI's analysis."""
+    if "raw" not in data:
+        return dict(data)
+    return {
+        "frequency": data.get("frequency"),
+        "raw": data["raw"],
+        "code": data["code"],
+        "fingerprint": data.get("fingerprint"),
+        "frames": data["raw_analysis"]["frames"],
+        "good_frames": data["raw_analysis"]["good_frames"],
+        "bits": data["analysis"]["bits"],
+    }

@@ -3,7 +3,8 @@
 Codes are summarised (type, frames, length), not included: they are large
 and they are the user's remotes. Nothing here is secret, but the entity ids
 and names of the relays and meters are kept, since they are what matters
-when something goes wrong.
+when something goes wrong. The rest of the report (transmitters, ESPHome
+devices, entities, trace and log) comes from ``debug``.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from homeassistant.core import HomeAssistant
 
 from . import codec
 from .const import VERSION
+from .debug import async_build_report
 from .hub import RFHub
 
 
@@ -39,8 +41,9 @@ def _command_summary(cmd: dict) -> dict[str, Any]:
     return summary
 
 
-async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry) -> dict[str, Any]:
-    hub: RFHub = entry.runtime_data
+def config_summary(hub: RFHub) -> dict[str, Any]:
+    """The entry and every device, with codes summarised."""
+    entry = hub.entry
     devices = []
     for device in hub.store.devices.values():
         controller = hub.relays.get(device["id"])
@@ -76,3 +79,9 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry) -> dict
         "calibrating": hub.calibrating,
         "devices": devices,
     }
+
+
+async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry) -> dict[str, Any]:
+    """Home Assistant's own diagnostics download: the same report as the panel's button."""
+    report = await async_build_report(hass, entry.runtime_data)
+    return {**report.pop("config"), **report}

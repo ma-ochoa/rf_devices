@@ -13,7 +13,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
-from . import services, websocket_api
+from . import debug, services, websocket_api
 from .const import DOMAIN, MANUFACTURER, PANEL_URL, PLATFORMS, STATIC_URL, VERSION
 from .hub import RFHub
 from .models import device_model, entity_plan, registry_device_ids
@@ -32,6 +32,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     )
     websocket_api.async_register(hass)
     services.async_register(hass)
+    debug.async_start_log_capture(hass)
     return True
 
 

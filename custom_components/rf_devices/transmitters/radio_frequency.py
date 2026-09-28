@@ -21,7 +21,7 @@ from collections.abc import AsyncIterator
 
 from homeassistant.exceptions import HomeAssistantError
 
-from .. import codec
+from .. import codec, debug
 from ..const import LEARN_TIMEOUT
 from .base import LearnError, LearnEvent, Transmitter
 
@@ -91,6 +91,10 @@ class RadioFrequencyTransmitter(Transmitter):
         command = OOKCommand(
             frequency=carrier_for(packet, self._ranges()), timings=timings, repeat_count=repeat
         )
+        debug.trace(
+            self.hass, "rf_send", transmitter=self.entity_id, carrier=command.frequency,
+            repeat=repeat, pulses=len(timings), timings=debug.clip(timings),
+        )
         await async_send_command(self.hass, self.entity_id, command)
         # Some adapters (ESPHome) return before the radio is done. Wait for
         # the burst to end so the hub's pause between codes starts after it.
@@ -132,6 +136,7 @@ class RadioFrequencyTransmitter(Transmitter):
 
     async def async_learn(self, frequency: float | None) -> AsyncIterator[LearnEvent]:
         data, receivers = self._esphome()
+        debug.trace(self.hass, "rx_receivers", receivers=[debug.info_dict(i) for i in receivers.values()])
         info = next(iter(receivers.values()))
         fixed = info.frequency_min if info.frequency_min and info.frequency_min == info.frequency_max else 0
         frequency_mhz = round(fixed / 1_000_000, 2) if fixed else None
@@ -143,11 +148,18 @@ class RadioFrequencyTransmitter(Transmitter):
 
         def on_receive(event) -> None:
             nonlocal first, last
-            if event.key not in receivers:
-                return  # the IR receiver, or another entity
             timings = list(event.timings)
-            if sum(1 for v in timings if v) < codec.MIN_RECEIVED_PULSES:
-                return  # receiver noise
+            ignored = None
+            if event.key not in receivers:
+                ignored = "other receiver (IR?)"
+            elif sum(1 for v in timings if v) < codec.MIN_RECEIVED_PULSES:
+                ignored = "too short (noise)"
+            debug.trace(
+                self.hass, "rx", key=event.key, pulses=len(timings), ignored=ignored,
+                timings=debug.clip(timings),
+            )
+            if ignored:
+                return
             now = time.monotonic()
             first = first or now
             last = now

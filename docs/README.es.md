@@ -307,8 +307,11 @@ activados se anota cada ráfaga recibida: adjúntalos a una incidencia si una ca
 
 ## Resolución de problemas
 
-- **Diagnósticos**: *Ajustes → Dispositivos y servicios → RF Devices → ⋮ → Descargar
-  diagnósticos* da la configuración de cada dispositivo con los códigos resumidos, sin incluirlos.
+- **Diagnósticos**: el botón *Diagnóstico* del panel (o *Ajustes → Dispositivos y servicios →
+  RF Devices → ⋮ → Descargar diagnósticos*) descarga un informe con versiones, emisores,
+  dispositivos ESPHome con RF/IR, entidades usadas, últimos envíos y capturas (con las ráfagas
+  recibidas) y las últimas líneas del registro. Los códigos guardados van resumidos, no
+  incluidos. Adjúntalo a la incidencia.
 - **Registros de depuración**:
   ```yaml
   logger:

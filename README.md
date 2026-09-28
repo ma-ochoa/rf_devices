@@ -292,8 +292,11 @@ capture fails.
 
 ## Troubleshooting
 
-- **Diagnostics**: *Settings → Devices & services → RF Devices → ⋮ → Download diagnostics*
-  gives the configuration of every device, with codes summarised and not included.
+- **Diagnostics**: the panel's *Diagnostics* button (or *Settings → Devices & services → RF
+  Devices → ⋮ → Download diagnostics*) downloads a report with versions, transmitters, ESPHome
+  RF/IR devices, the entities in use, the latest transmissions and captures (with the bursts
+  received) and recent log lines. Stored codes are summarised, not included. Attach it to an
+  issue.
 - **Debug logs**:
   ```yaml
   logger:

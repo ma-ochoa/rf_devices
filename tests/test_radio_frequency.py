@@ -253,3 +253,45 @@ async def test_learn_refused_when_disconnected(hass: HomeAssistant, rf, hass_ws_
     msg = await ws.receive_json()
     assert not msg["success"]
     assert "not connected" in msg["error"]["message"]
+
+
+async def test_debug_report(hass: HomeAssistant, rf, hass_ws_client, monkeypatch) -> None:
+    """The panel's download: everything needed to debug a capture remotely."""
+    import logging
+
+    monkeypatch.setattr(rf_tx, "QUIET_AFTER_PRESS", 0.2)
+    await hass.services.async_call("light", "turn_on", {"entity_id": "light.luz_cama"}, blocking=True)
+    ws = await hass_ws_client(hass)
+    await ws.send_json_auto_id({"type": "rf_devices/learn"})
+    assert (await ws.receive_json())["success"]
+    assert (await ws.receive_json(timeout=10))["event"]["stage"] == "press"
+    rf.client.emit(2, [200, -150, 90])
+    for burst in _esphome_bursts(capture(BITS_B, frames=10)):
+        rf.client.emit(2, burst)
+    stages, _ = await _stages(ws)
+    assert stages == ["captured"]
+    logging.getLogger("custom_components.rf_devices.test").warning("something odd")
+
+    await ws.send_json_auto_id({"type": "rf_devices/debug_report"})
+    msg = await ws.receive_json()
+    assert msg["success"], msg
+    report = msg["result"]
+    assert report["rf_devices"] == report["config"]["version"]
+    assert report["components"]["radio_frequency"] is True
+    tx = next(t for t in report["transmitters"] if t["entity_id"] == TX)
+    assert tx["learn_problem"] is None and tx["platform"] == "esphome"
+    assert tx["frequency_ranges"] == [[433_920_000, 433_920_000]]
+    esp = report["esphome"][0]
+    assert {i["key"] for i in esp["rf_ir_infos"]} == {1, 2}
+    assert any(e["entity_id"] == TX for e in esp["entities"])
+    assert any(e["entity_id"] == "light.luz_cama" for e in report["entities"])
+    kinds = [e["kind"] for e in report["trace"]]
+    for kind in ("rf_send", "send", "learn_start", "rx_receivers", "rx", "learn_press", "learn_captured"):
+        assert kind in kinds, kind
+    rx = [e for e in report["trace"] if e["kind"] == "rx"]
+    assert rx[0]["ignored"] == "too short (noise)"
+    assert sum(e["ignored"] is None for e in rx) == 10  # the cut first frame is too short too
+    captured = next(e for e in report["trace"] if e["kind"] == "learn_captured")
+    assert captured["fingerprint"] == codec.fingerprint(capture(BITS_B))
+    assert any(r["message"] == "something odd" for r in report["log"])
+    assert "code" not in report["config"]["devices"][0]["commands"]["on"]

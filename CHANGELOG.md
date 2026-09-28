@@ -11,6 +11,10 @@
   (learning, safeguards, power-cycling) is unchanged.
 - Codes are still stored in the Broadlink format and are converted when sent through a
   `radio_frequency` entity.
+- New: **Diagnostics** button in the panel. It downloads a report for remote debugging:
+  versions, transmitters and why each can or cannot learn, ESPHome devices with RF/IR, the
+  entities in use, the latest transmissions and captures (with every burst received) and recent
+  log lines. Home Assistant's own *Download diagnostics* now gives the same report.
 - Requires Home Assistant 2026.5 or newer.
 
 ## 0.11.8
