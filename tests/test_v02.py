@@ -246,3 +246,16 @@ async def test_rounded_percentages_hit_the_intended_speed(hass: HomeAssistant, r
     await call(hass, "fan", "set_percentage", "fan.cama", percentage=67)
     assert sent(rf)[-1] == C["dim"]  # speed 4
     assert hass.states.get("fan.cama").attributes["speed_percentages"] == [16, 33, 50, 66, 83, 100]
+
+
+async def test_aligner_keeps_a_running_preset(hass: HomeAssistant, rf) -> None:
+    """Breeze swings between speeds on purpose: a reading must not turn it into a speed."""
+    from custom_components.rf_devices.calibration import Estimate
+    from custom_components.rf_devices.entity import live_entities
+
+    await call(hass, "fan", "set_preset_mode", "fan.cama", preset_mode="Brisa")
+    fan = live_entities(hass)["fan.cama"]
+    fan._apply_estimate(Estimate(speed=3, fan_on=True, light=False))
+    assert hass.states.get("fan.cama").attributes["preset_mode"] == "Brisa"
+    fan._apply_estimate(Estimate(speed=None, fan_on=False, light=False))  # really stopped
+    assert hass.states.get("fan.cama").state == "off"

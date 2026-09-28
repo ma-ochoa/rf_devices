@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.11.7
+
+- Instant light detection when the original remote is used: a change of about the lamp's draw from
+  the last steady value switches the light at once, from the meter's own report or the live
+  reading, whichever comes first (tested: 0-1 s after the lamp changes, Shelly Gen1 and Gen2).
+  Values in passing (a lamp fading, a motor ramping) are ignored. The fan is only decided on
+  steady readings, and not at all when the whole change is the lamp's jump.
+- The light ignores the meter for 6 s after our own command (HA, voice, wall switch): a lamp that
+  fades in could be turned back off by an early reading.
+- Live readings of one device are shared for 0.8 s between callers (aligner, sensor, panel): a
+  Shelly Gen1 timed out when asked by several at once.
+- A running preset (e.g. Breeze, whose draw swings between speeds on purpose) is no longer replaced
+  by a speed from a reading.
+- Fixed a deprecated device-registry lookup (HA 2027.8) and an error logged when Home Assistant
+  stops during a live reading.
+
 ## 0.11.5
 
 - Quick light calibration: a change is read until it settles (live, reading by reading) and the

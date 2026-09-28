@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from homeassistant.components.light import (
@@ -34,6 +35,7 @@ from .models import color_kelvins, color_modes
 from .onoff import OnOffMixin
 
 # Nothing is polled; commands are queued by the hub, not by the platform.
+_LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
 
 
@@ -52,7 +54,8 @@ async def async_setup_entry(
 
 LAMP_COMMAND_GRACE = 6.0  # s after our own light command: the lamp may not have lit yet
 LAMP_DRIFT_W = 1.0  # smaller changes are drift, not a switch
-LAMP_SETTLE_READS, LAMP_SETTLE_EVERY = 12, 1.0  # after a change: read until 3 agree
+LAMP_SETTLE_READS, LAMP_SETTLE_EVERY = 20, 0.5  # after a change: read until 2 agree
+LAMP_POLL_EVERY = 1.0  # live meters: seconds between readings
 LAMP_JOIN_WINDOW = 20.0  # s: changes this close together may be one lamp switch in pieces
 FAN_QUIET = 90.0  # s after a fan change: the motor's ramp could look like the lamp
 FAN_QUIET_LIVE = 15.0  # ... with a live meter, settling is checked reading by reading
@@ -185,7 +188,13 @@ class RFFanLight(RFLight):
         if self._lamp_calibration:
             meter = self.device["options"]["light_state_entity"]
             self._last_watts = read_watts(self.hass, meter)
-            self._meter_live = Meter(self.hass, meter).direct
+            live_meter = Meter(self.hass, meter)
+            self._meter_live = live_meter.direct
+            if self._meter_live:
+                poll = self.hass.async_create_background_task(
+                    self._async_lamp_poll(live_meter), f"rf_devices lamp {self.entity_id}"
+                )
+                self.async_on_remove(poll.cancel)
             self.async_on_remove(
                 async_track_state_change_event(self.hass, [meter], self._lamp_reading)
             )
@@ -204,21 +213,41 @@ class RFFanLight(RFLight):
         jump of about the lamp's watts does (a motor ramps). Readings right
         after our own command or a fan change are left alone.
         """
-        cal = self._lamp_calibration
         try:
             watts = float(event.data["new_state"].state)
         except (AttributeError, TypeError, ValueError):
             return
+        self._lamp_value(watts)
+
+    async def _async_lamp_poll(self, meter: Meter) -> None:
+        """Live meter: read it every second, instead of waiting for its report to HA."""
+        while True:
+            if self._lamp_settling is None and (watts := await meter.async_read()) is not None:
+                self._lamp_value(watts)
+            await asyncio.sleep(LAMP_POLL_EVERY)
+
+    @callback
+    def _lamp_value(self, watts: float) -> None:
+        cal = self._lamp_calibration
         if cal is None or self.hub.calibrating:
             return
         if (wait := self._lamp_quiet_left()) > 0:
             # Too soon to trust a reading; look again (by level) once it is quiet,
             # since the meter may not report anything new by then.
+            _LOGGER.debug("%s: %s W while quiet (%.1f s left)", self.entity_id, watts, wait)
             self._schedule_lamp_check(wait)
             return
+        _LOGGER.debug("%s: %s W (baseline %s, settling %s)", self.entity_id, watts, self._last_watts,
+                      self._lamp_settling is not None)
         if self._last_watts is None or abs(watts - self._last_watts) < LAMP_DRIFT_W:
             self._last_watts = watts  # small drift: the new baseline
             return
+        # Decide at once when this reading already tells (a remote press should
+        # show immediately); the settle check below confirms or corrects it.
+        if self._fan_off():
+            self.async_apply_measured(lamp_from_level(cal, watts))
+        elif (on := lamp_from_jump(cal, self._last_watts, watts)) is not None:
+            self.async_apply_measured(on)
         if self._lamp_settling is None:
             self._lamp_settling = self.hass.async_create_task(self._async_lamp_settle())
 
@@ -235,8 +264,11 @@ class RFFanLight(RFLight):
             for _ in range(LAMP_SETTLE_READS):
                 value = await meter.async_read()
                 if value is not None:
-                    recent = [*recent, value][-3:]
-                    if len(recent) == 3 and max(recent) - min(recent) <= LAMP_DRIFT_W:
+                    if self._fan_off() and self._lamp_quiet_left() <= 0:
+                        # A lamp ramping up: decide as soon as it is past half its draw.
+                        self.async_apply_measured(lamp_from_level(cal, value))
+                    recent = [*recent, value][-2:]
+                    if len(recent) == 2 and max(recent) - min(recent) <= LAMP_DRIFT_W:
                         break
                 await asyncio.sleep(LAMP_SETTLE_EVERY)
             if not recent or cal is None:
@@ -278,7 +310,7 @@ class RFFanLight(RFLight):
 
     def _lamp_quiet_left(self) -> float:
         """Seconds until readings can be trusted: after our own command or a fan change."""
-        own = LAMP_COMMAND_GRACE - (self.hass.loop.time() - max(self.user_on_at, self.user_off_at))
+        own = LAMP_COMMAND_GRACE - (self.hass.loop.time() - max(self.user_on_at, self.user_off_at, self.sent_at))
         fan = self._fan_state()
         quiet = FAN_QUIET_LIVE if self._meter_live else FAN_QUIET
         motor = quiet - (dt_util.utcnow() - fan.last_changed).total_seconds() if fan else 0
@@ -318,8 +350,15 @@ class RFFanLight(RFLight):
 
     @callback
     def async_apply_measured(self, on: bool) -> None:
-        """Called by the fan's power aligner; nothing is sent."""
+        """Called by the fan's power aligner; nothing is sent.
+
+        Not right after our own command (HA, voice, the wall switch): the lamp
+        may take a few seconds to light or fade, and the meter would still
+        show the old state.
+        """
         if self.hub.calibrating or self._op_lock.locked() or on == self._attr_is_on:
+            return
+        if self.hass.loop.time() - self.sent_at < LAMP_COMMAND_GRACE:
             return
         self._attr_is_on = on
         self.async_write_ha_state()

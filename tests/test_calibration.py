@@ -541,3 +541,18 @@ async def test_quick_light_calibration_measures_only_the_lamp() -> None:
     assert done["calibration"]["idle"] == 0.4 and done["calibration"]["light"] == 22.9
     assert "speeds" not in done["calibration"]
     assert seen == [True, False]  # light on, then off again
+
+
+def test_aligner_instant_light_only_on_a_lamp_sized_jump(hass) -> None:
+    from custom_components.rf_devices.calibration import PowerAligner
+
+    decided = []
+    cal = {"idle": 0.0, "light": 22.8, "speeds": [[2.4, 25.2], [6.0, 28.8], [18.9, 41.7]]}
+    meter = SimpleNamespace(direct=True, entity_id="sensor.power")
+    aligner = PowerAligner(hass, meter, cal, lambda e: decided.append(("fan", e)), apply_light=lambda on: decided.append(("light", on)))
+    aligner._steady = 22.6  # lamp on, fan stopped
+    aligner._light_from_jump(17.9)  # fading: in passing
+    aligner._light_from_jump(11.9)
+    assert decided == []  # neither the light nor the fan is touched by a value in passing
+    aligner._light_from_jump(1.8)  # now the lamp's size: off
+    assert decided == [("light", False)]

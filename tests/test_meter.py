@@ -125,3 +125,14 @@ async def test_fast_motor_settles_by_itself(monkeypatch) -> None:
     watts, took, settled = await cal.async_wait_motor(_Fast())
     assert settled and watts == 41.5  # rounded to 0.1 W
     assert took <= 45  # no fixed minute: a fast fan is done in well under a minute
+
+
+async def test_readings_are_shared_between_callers(hass: HomeAssistant, aioclient_mock, monkeypatch) -> None:
+    from custom_components.rf_devices import meter as meter_mod
+
+    monkeypatch.setattr(meter_mod, "SHARE_FOR", 5)
+    aioclient_mock.get(URL, json={"apower": 4.37})
+    entity = _shelly(hass)
+    assert await Meter(hass, entity).async_read() == 4.37
+    assert await Meter(hass, entity).async_read() == 4.37  # another caller, same second
+    assert aioclient_mock.call_count == 1  # the device was asked once

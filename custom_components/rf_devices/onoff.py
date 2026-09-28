@@ -45,6 +45,7 @@ class OnOffMixin(RFEntity):
         self._op_lock = asyncio.Lock()
         self.user_on_at = float("-inf")  # loop time someone last asked to turn it on
         self.user_off_at = float("-inf")  # ... and to turn it off
+        self.sent_at = float("-inf")  # loop time the last on/off/toggle code was sent
 
     @property
     def _mode(self) -> str:
@@ -146,6 +147,7 @@ class OnOffMixin(RFEntity):
             await self._async_send_state(on)
 
     async def _async_send_state(self, on: bool) -> None:
+        self.sent_at = self.hass.loop.time()
         if self._toggle_mode:
             await self.async_send_role(self._roles["toggle"])
         else:

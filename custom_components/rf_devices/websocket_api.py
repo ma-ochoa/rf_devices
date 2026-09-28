@@ -80,7 +80,7 @@ def _describe(hass: HomeAssistant, hub: RFHub, device: dict) -> dict:
     ha_devices = [
         {"id": entry.id, "name": entry.name_by_user or entry.name}
         for ident in sorted(registry_device_ids(device))
-        if (entry := dev_reg.async_get_device(identifiers={(DOMAIN, ident)}))
+        if (entry := _registry_device(dev_reg, hub, ident))
     ]
     return {
         **device,
@@ -92,6 +92,13 @@ def _describe(hass: HomeAssistant, hub: RFHub, device: dict) -> dict:
         "entities": entities,
         "light_entities": light_entities,
     }
+
+
+def _registry_device(dev_reg: dr.DeviceRegistry, hub: RFHub, ident: str) -> dr.DeviceEntry | None:
+    """The device registry entry of one of our devices (HA 2026.9+ API, older fallback)."""
+    if hasattr(dev_reg, "async_get_device_by_identifier"):
+        return dev_reg.async_get_device_by_identifier((DOMAIN, ident), hub.entry.entry_id)
+    return dev_reg.async_get_device(identifiers={(DOMAIN, ident)})
 
 
 def _reload(hass: HomeAssistant, hub: RFHub) -> None:

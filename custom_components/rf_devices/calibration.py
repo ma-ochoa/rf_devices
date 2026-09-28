@@ -50,13 +50,17 @@ FAN_TOLERANCE_W, FAN_TOLERANCE_PCT, FAN_MAX_SLOPE = 0.5, 0.03, 0.01
 SLOW_FAN_HOLD, SLOW_FAN_MIN, SLOW_FAN_MAX = 60.0, 120.0, 300.0
 SLOW_FAN_TOLERANCE_W = 1.0
 QUICK_DELAY = 5.0  # seconds after a change before correcting light and on/off
+# A steady live reading: three in a row within 1 W, over more than one of the
+# meter's own measurement periods (~1 s), so a value in passing is not taken.
+STEADY_W, STEADY_READS, STEADY_EVERY, STEADY_COUNT = 1.0, 10, 0.7, 3
+ABRUPT_W = 4.0  # live: a change this big between two readings is checked at once
 SLOW_SETTLE = 90.0  # pushed-only meters: seconds without a report = settled
 ALIGN_HOLD = 20.0  # live meters: flat this long to count as settled
 MIN_MARGIN_W = 2.0  # best match must beat the runner-up by this much
 LIVE_MARGIN_W = 0.5  # ... when the table and readings are live (0.1 W steps)
 COLOUR_STEP_TOLERANCE = 0.4  # W: a jump matches a colour press within this
 COLOUR_STEP_MIN = 0.5  # W: jumps smaller than this cannot be seen
-MONITOR_EVERY = 3.0  # live meters: seconds between readings while watching
+MONITOR_EVERY = 1.0  # live meters: seconds between readings while watching
 REDECIDE_W = 0.3  # re-decide when the settled reading moves this much
 COLOUR_HOLD_W = 0.25  # after a sudden jump the new level must hold within this
 COLOUR_CONFIRM = 2  # readings the new level must hold to count as a colour press
@@ -628,8 +632,12 @@ class PowerAligner:
         speed_state: Callable[[], tuple[int | None, bool]] = lambda: (None, False),
         lamp_on: Callable[[], bool | None] = lambda: None,
         learn: Callable[[int, str, float], None] | None = None,
+        apply_light: Callable[[bool], None] | None = None,
     ) -> None:
         self.hass = hass
+        self._apply_light = apply_light
+        self._steady: float | None = None  # last steady reading
+        self._steady_before: float | None = None  # the steady level before the last change
         self.meter = meter
         self.calibration = calibration
         self._apply = apply
@@ -723,7 +731,16 @@ class PowerAligner:
 
     @callback
     def _changed(self, event: Event[EventStateChangedData]) -> None:
+        if self.meter.direct:
+            # The device's own report: a lamp switched with the remote shows in
+            # well under a second, so the light is decided at once from it.
+            try:
+                self._light_from_jump(float(event.data["new_state"].state))
+            except (AttributeError, TypeError, ValueError):
+                pass
         self._cancel()
+        # The fan (on/off) is only decided on settled values: a lamp fading or a
+        # motor ramping passes through values that read as something else.
         self._cancel_timers.append(async_call_later(self.hass, QUICK_DELAY, self._quick))
         if not self.meter.direct:
             self._cancel_timers.append(async_call_later(self.hass, SLOW_SETTLE, self._slow))
@@ -736,23 +753,82 @@ class PowerAligner:
     def _slow(self, _now) -> None:
         self.hass.async_create_background_task(self._async_final(), "rf_devices aligner")
 
-    async def _async_follow(self) -> None:
-        watts = await self.meter.async_read()
-        if watts is None:
+    async def _read_steady(self) -> float | None:
+        """A live reading once ``STEADY_COUNT`` in a row agree (a lamp may fade or light in steps)."""
+        recent: list[float] = []
+        for _ in range(STEADY_READS):
+            watts = await self.meter.async_read()
+            if watts is not None:
+                recent = [*recent, watts][-STEADY_COUNT:]
+                if len(recent) == STEADY_COUNT and max(recent) - min(recent) <= STEADY_W:
+                    return recent[-1]
+            await asyncio.sleep(STEADY_EVERY)
+        return recent[-1] if recent else None
+
+    def _set_steady(self, watts: float) -> None:
+        if self._steady is not None and abs(watts - self._steady) > STEADY_W:
+            self._steady_before = self._steady  # a new level: remember where it came from
+        self._steady = watts
+
+    def _light_from_jump(self, watts: float) -> None:
+        """Instant light decision: a change of about the lamp's draw from the last steady value.
+
+        Only the light: a value in passing (a lamp fading, a motor ramping) is
+        not a jump of the lamp's size, so it is left for the steady check,
+        which alone decides the fan.
+        """
+        if self._apply_light is None or self._steady is None:
             return
+        if (on := lamp_from_jump(self.calibration, self._steady, watts)) is not None:
+            _LOGGER.debug("Meter %s: %s -> %s W, lamp %s", self.meter.entity_id, self._steady, watts,
+                          "on" if on else "off")
+            self._apply_light(on)
+
+    def _apply_quick(self, watts: float) -> Estimate | None:
+        """Light and fan on/off from one reading (the speed is left for later)."""
         estimate = classify(self.calibration, watts, self._light_mode())
         _LOGGER.debug("Meter %s quick check %s W -> %s", self.meter.entity_id, watts, estimate)
         if estimate is not None:
             self._apply(Estimate(speed=None, fan_on=estimate.fan_on, light=estimate.light))
-            if not estimate.fan_on:  # lamp alone: its reading is final at once
-                self._colour_jump(watts, estimate, settled=True)
+        return estimate
+
+    async def _async_follow(self) -> None:
+        watts = await (self._read_steady() if self.meter.direct else self.meter.async_read())
+        if watts is None:
+            return
+        # The level before this change (the monitor may already have the new one).
+        before = self._steady_before if self._steady is not None and abs(self._steady - watts) <= STEADY_W else self._steady
+        self._set_steady(watts)
+        if (
+            self._apply_light is not None
+            and before is not None
+            and (on := lamp_from_jump(self.calibration, before, watts)) is not None
+        ):
+            # The whole change is the lamp's jump: the fan did not change, even if
+            # the lamp now draws a little more or less than when calibrated.
+            self._apply_light(on)
+            return
+        estimate = self._apply_quick(watts)
+        if estimate is not None and not estimate.fan_on:  # lamp alone: its reading is final
+            self._colour_jump(watts, estimate, settled=True)
 
     async def _async_monitor(self) -> None:
         """Read live every few seconds; decide each time the reading settles anew."""
         window: list[tuple[float, float]] = []
+        last: float | None = None
+        recent: list[float] = []
         while True:
             watts = await self.meter.async_read()
             now = self.hass.loop.time()
+            if watts is not None and last is not None and abs(watts - last) >= ABRUPT_W:
+                # The lamp changes the draw at once: decide the light now, in
+                # case the meter's own report to HA is late.
+                self._light_from_jump(watts)
+            if watts is not None:
+                recent = [*recent, watts][-STEADY_COUNT:]
+                if len(recent) == STEADY_COUNT and max(recent) - min(recent) <= STEADY_W:
+                    self._set_steady(watts)  # the baseline for the next lamp jump
+            last = watts if watts is not None else last
             if watts is not None and self._abrupt_colour(watts):
                 window = []  # a new level: stability starts again
             if watts is not None:

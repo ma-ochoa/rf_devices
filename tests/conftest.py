@@ -21,3 +21,13 @@ def mock_frontend():
         ) as register,
     ):
         yield register
+
+
+@pytest.fixture(autouse=True)
+def fresh_meter_readings(monkeypatch):
+    """Readings are shared for under a second between callers; not between tests."""
+    from custom_components.rf_devices import meter
+
+    meter._LAST.clear()
+    monkeypatch.setattr(meter, "SHARE_FOR", 0)
+    yield

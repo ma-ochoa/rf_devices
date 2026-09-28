@@ -133,6 +133,7 @@ class RFFan(RFEntity, FanEntity):
                 self._speed_state,
                 self._lamp_on,
                 self._learned if opts.get("live_calibration", True) else None,
+                self._light_measured,
             )
             self._aligner = aligner
             self.async_on_remove(aligner.async_start())
@@ -151,6 +152,10 @@ class RFFan(RFEntity, FanEntity):
         if not estimate.fan_on and self.is_on:
             self._set_off()
             changed = True
+        elif estimate.fan_on and self._attr_preset_mode is not None and self.is_on:
+            # A preset such as Breeze varies the speed on purpose (its draw swings
+            # between speeds): keep it, only "off" or the light are corrected.
+            pass
         elif estimate.fan_on:
             speed = estimate.speed or (self._last_speed if self.is_on else None)
             if speed is None:
@@ -168,6 +173,15 @@ class RFFan(RFEntity, FanEntity):
         light = find_by_unique_id(self.hass, f"{self.device['id']}_fan_light")
         if light is not None and hasattr(light, "async_apply_measured"):
             light.async_apply_measured(estimate.light)
+
+    @callback
+    def _light_measured(self, on: bool) -> None:
+        """Instant light decision from the aligner (a jump of the lamp's size)."""
+        if self.hub.calibrating or not self.powered:
+            return
+        light = find_by_unique_id(self.hass, f"{self.device['id']}_fan_light")
+        if light is not None and hasattr(light, "async_apply_measured"):
+            light.async_apply_measured(on)
 
     @callback
     def _speed_state(self) -> tuple[int | None, bool]:

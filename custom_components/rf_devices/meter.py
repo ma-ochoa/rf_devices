@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 import aiohttp
@@ -33,6 +34,11 @@ _METHODS = {
 _SHELLY_GEN1_UID = re.compile(r"^[0-9A-Fa-f]{12}-(relay|emeter)_(\d+)-(power|current)$")
 _GEN1_LISTS = {"relay": "meters", "emeter": "emeters"}
 TIMEOUT = aiohttp.ClientTimeout(total=2)
+# Several parts may read the same device within a second (aligner, sensor,
+# panel): share one answer instead of asking it again. A Shelly measures
+# about once per second anyway, and a Gen1 (ESP8266) times out when flooded.
+SHARE_FOR = 0.8
+_LAST: dict[str, tuple[float, float]] = {}  # url -> (monotonic time, value)
 
 
 @dataclass
@@ -64,6 +70,9 @@ class Meter:
     async def async_read(self) -> float | None:
         if not self.direct:
             return self.state_value()
+        cached = _LAST.get(self._direct.url + repr(self._direct.path))
+        if cached and time.monotonic() - cached[0] < SHARE_FOR:
+            return cached[1]
         try:
             session = async_get_clientsession(self.hass)
             async with session.get(self._direct.url, timeout=TIMEOUT) as resp:
@@ -71,8 +80,12 @@ class Meter:
                 data = await resp.json(content_type=None)
             for key in self._direct.path:
                 data = data[key]
-            return float(data)
-        except (TimeoutError, aiohttp.ClientError, IndexError, KeyError, TypeError, ValueError) as err:
+            value = float(data)
+            _LAST[self._direct.url + repr(self._direct.path)] = (time.monotonic(), value)
+            return value
+        except (
+            TimeoutError, aiohttp.ClientError, RuntimeError, IndexError, KeyError, TypeError, ValueError
+        ) as err:  # RuntimeError: the HTTP session closing while Home Assistant stops
             # Usually a Wi-Fi hiccup: use HA's last value this time, ask again next time.
             _LOGGER.debug("Live reading of %s failed (%r); using HA's value", self.entity_id, err)
             return self.state_value()
