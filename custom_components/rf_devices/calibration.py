@@ -423,6 +423,84 @@ def classify(
     return _classify(calibration, watts, None, *extra)
 
 
+async def _measure_lamp(
+    meter: Meter,
+    set_light: Callable[[bool], Any],
+    next_color: Callable[[], Any] | None,
+    colors: int,
+    first_mode: int,
+    result: dict,
+) -> AsyncIterator[dict]:
+    """Idle, then the lamp in each colour mode, with the fan stopped (seconds, not minutes)."""
+    yield {"stage": "meter", "direct": meter.direct}
+    idle, _, _ = await async_wait_lamp(meter)
+    yield {"stage": "measured", "what": "idle", "watts": idle}
+
+    await set_light(True)
+    light, _, _ = await async_wait_lamp(meter)
+    yield {"stage": "measured", "what": "light", "watts": light, "mode": first_mode + 1}
+    measured = [light]
+    if next_color is not None and colors > 1:
+        for step in range(1, colors):
+            await next_color()
+            watts, _, _ = await async_wait_lamp(meter)
+            measured.append(watts)
+            yield {"stage": "measured", "what": "light", "watts": watts,
+                   "mode": (first_mode + step) % colors + 1}
+        await next_color()  # back to the mode it started in
+        await async_wait_lamp(meter)
+    await set_light(False)
+    await async_wait_lamp(meter)
+    # Stored in the order of the mode names, whatever mode the lamp was in.
+    n = len(measured)
+    result.update(idle=idle, light=light, light_modes=[measured[(i - first_mode) % n] for i in range(n)])
+
+
+async def async_calibrate_light(
+    meter: Meter,
+    set_light: Callable[[bool], Any],
+    next_color: Callable[[], Any] | None = None,
+    colors: int = 1,
+    first_mode: int = 0,
+) -> AsyncIterator[dict]:
+    """Quick calibration: only idle and the lamp, with the fan stopped (1–2 minutes).
+
+    Enough to tell the lamp from the motor by its sudden jumps (see
+    ``lamp_from_jump``) without measuring every speed.
+    """
+    result: dict = {}
+    async for event in _measure_lamp(meter, set_light, next_color, colors, first_mode, result):
+        yield event
+    yield {"stage": "done", "calibration": {
+        **result, "direct": meter.direct, "measured": dt_util.utcnow().isoformat(),
+    }}
+
+
+LAMP_JUMP_PCT = 0.35  # a jump within ±35 % (or ±3 W) of the lamp's draw is the lamp
+LAMP_JUMP_MIN_W = 3.0
+
+
+def lamp_from_jump(calibration: dict, before: float, after: float) -> bool | None:
+    """The lamp switching, told from a sudden change between two readings.
+
+    The lamp changes the draw at once by about its own watts; a motor ramps.
+    Returns True (lamp on), False (lamp off) or None (not the lamp).
+    """
+    lamp = calibration["light"] - calibration["idle"]
+    if lamp <= 0:
+        return None
+    jump = after - before
+    if abs(abs(jump) - lamp) <= max(LAMP_JUMP_MIN_W, lamp * LAMP_JUMP_PCT):
+        return jump > 0
+    return None
+
+
+def lamp_from_level(calibration: dict, watts: float) -> bool:
+    """With the fan stopped, the lamp is on when the draw is past half its watts."""
+    lamp = calibration["light"] - calibration["idle"]
+    return watts - calibration["idle"] > lamp / 2
+
+
 async def async_calibrate(
     meter: Meter,
     speeds: int,
@@ -443,29 +521,11 @@ async def async_calibrate(
     The fan and the light must be off when it starts; the caller checks it.
     Yields progress events and finally ``{"stage": "done", "calibration": ...}``.
     """
-    yield {"stage": "meter", "direct": meter.direct}
-    idle, _, _ = await async_wait_lamp(meter)
-    yield {"stage": "measured", "what": "idle", "watts": idle}
-
-    await set_light(True)
-    light, _, _ = await async_wait_lamp(meter)
-    yield {"stage": "measured", "what": "light", "watts": light, "mode": first_mode + 1}
-    measured = [light]
-    if next_color is not None and colors > 1:
-        for step in range(1, colors):
-            await next_color()
-            watts, _, _ = await async_wait_lamp(meter)
-            measured.append(watts)
-            yield {"stage": "measured", "what": "light", "watts": watts,
-                   "mode": (first_mode + step) % colors + 1}
-        await next_color()  # back to the mode it started in
-        await async_wait_lamp(meter)
-    await set_light(False)
-    await async_wait_lamp(meter)
+    lamp_result: dict = {}
+    async for event in _measure_lamp(meter, set_light, next_color, colors, first_mode, lamp_result):
+        yield event
+    idle, light, modes = lamp_result["idle"], lamp_result["light"], lamp_result["light_modes"]
     lamp = round(light - idle, 1)
-    # Stored in the order of the mode names, whatever mode the lamp was in.
-    n = len(measured)
-    modes = [measured[(i - first_mode) % n] for i in range(n)]
 
     table: list[list[float]] = []
     settle_times: list[float] = []

@@ -209,6 +209,12 @@ const I18N = {
     code_title: "Código de «{role}»",
     devices_title: "Códigos de tus otros dispositivos",
     calibrate: "Calibrar consumo",
+    calibrate_light: "Calibrar solo la luz (1–2 min)",
+    calibrate_light_help: "La calibración rápida mide la lámpara con el ventilador parado. Basta para distinguir la luz del ventilador por los saltos de consumo; la completa, además, reconoce cada velocidad.",
+    calibrate_light_intro: "Se mide el consumo en reposo y el de la lámpara en cada modo de color, con el ventilador parado. La luz se encenderá, cambiará de color y se apagará.",
+    calibrate_light_before: "Antes de empezar, apaga el ventilador y la luz con el mando. Tarda 1–2 minutos.",
+    cal_light_done: "Listo. Guárdalo para que la luz siga al consumo (si ya tienes la calibración completa, se actualizan sus valores de la lámpara).",
+    cal_light_table: "Luz calibrada ({date})",
     calibrate_title: "Calibrar el consumo del ventilador",
     calibrate_intro: "Se medirá el reposo, la luz (en cada modo de color) y cada velocidad subiendo y después bajando, esperando a que el motor se estabilice (un par de minutos por paso: un motor con PWM gasta distinto al llegar a una velocidad desde abajo que desde arriba). Con esa tabla, RF Devices corregirá solo el estado del ventilador y de la luz cuando se use el mando original.",
     calibrate_before: "Antes de empezar: apaga el ventilador y la luz con el mando y no los toques hasta que termine. Tardará unos {min} minutos.",
@@ -235,6 +241,7 @@ const I18N = {
     cal_live: "Calibración en vivo: tras cada orden de velocidad, con la luz apagada, esperar a que el motor se estabilice de verdad (hasta 15 min) y corregir el valor de esa velocidad",
     cal_learned: "Corregido en vivo: {list}",
     cal_warn_close: "Hay velocidades con consumos muy parecidos ({list}): entre ellas solo se corregirá encendido/apagado.",
+    live_meter: "Consumo",
     live_relay: "Relé",
     live_switch: "Pulsador",
     live_on: "encendido",
@@ -511,6 +518,12 @@ const I18N = {
     code_title: "Code of “{role}”",
     devices_title: "Codes of your other devices",
     calibrate: "Calibrate power",
+    calibrate_light: "Calibrate the light only (1–2 min)",
+    calibrate_light_help: "The quick calibration measures the lamp with the fan stopped. That is enough to tell the light from the fan by its jumps in draw; the full one also recognises each speed.",
+    calibrate_light_intro: "Idle and the lamp in each colour mode are measured with the fan stopped. The light will turn on, change colour and turn off.",
+    calibrate_light_before: "Before starting, switch the fan and the light off with the remote. It takes 1–2 minutes.",
+    cal_light_done: "Done. Save it so the light follows the meter (with a full calibration, its lamp values are updated).",
+    cal_light_table: "Light calibrated ({date})",
     calibrate_title: "Calibrate the fan's power draw",
     calibrate_intro: "Idle, the light (in each colour mode) and every speed going up and then going down are measured, waiting for the motor to settle (a couple of minutes per step: a PWM motor draws differently when it reaches a speed from below than from above). With that table RF Devices corrects the fan and light state by itself when the original remote is used.",
     calibrate_before: "Before starting: switch the fan and its light off with the remote and leave them until it finishes. It takes about {min} minutes.",
@@ -537,6 +550,7 @@ const I18N = {
     cal_live: "Live calibration: after each speed command, with the light off, wait until the motor has really settled (up to 15 min) and correct that speed's value",
     cal_learned: "Corrected live: {list}",
     cal_warn_close: "Some speeds draw almost the same ({list}): between them only on/off is corrected.",
+    live_meter: "Power",
     live_relay: "Relay",
     live_switch: "Wall switch",
     live_on: "on",
@@ -1236,24 +1250,36 @@ class RFDevicesPanel extends HTMLElement {
       ${close.length ? `<small class="warn-text">${this.t("cal_warn_close", { list: close.join(", ") })}</small>` : ""}`;
   }
 
+  /** Idle and lamp draw (per colour mode) of a quick lamp calibration. */
+  lampSummary(lc) {
+    const names = this.colorNames();
+    const modes = lc.light_modes || [lc.light];
+    const rows = modes.map((w, i) => `<tr><td>💡 ${esc(modes.length > 1 ? names[i] || String(i + 1) : this.t("cal_light"))}</td><td>${this.fmt(w)} W</td><td>+${this.fmt(w - lc.idle)} W</td></tr>`).join("");
+    return `<table class="cal"><tr><td>${this.t("cal_idle")}</td><td>${this.fmt(lc.idle)} W</td><td></td></tr>${rows}</table>`;
+  }
+
   calibrationBlock() {
     const o = this._state.draft.options;
     const c = o.calibration;
+    const lc = o.light_calibration;
     return `<div class="full calblock">
       ${c ? `<b>${this.t("cal_table", { date: (c.measured || "").slice(0, 10) })}</b>${this.calibrationTable(c, true)}
       <label class="check full"><input type="checkbox" data-opt="live_calibration" ${(o.live_calibration ?? true) ? "checked" : ""}> ${this.t("cal_live")}</label>
       ${c.learned && Object.keys(c.learned).length ? `<small>${this.t("cal_learned", { list: Object.entries(c.learned).map(([k, v]) => `${k.replace("_up", " ↑").replace("_down", " ↓")} (${v.slice(5, 16).replace("T", " ")})`).join(", ") })}</small>` : ""}` : ""}
+      ${!c && lc ? `<b>${this.t("cal_light_table", { date: (lc.measured || "").slice(0, 10) })}</b>${this.lampSummary(lc)}` : ""}
       <div class="actions">
+        <button data-action="calibrate-light">💡 ${this.t("calibrate_light")}</button>
         <button data-action="calibrate">⚖ ${this.t("calibrate")}</button>
         ${c ? `<button data-action="cal-remove">${this.t("cal_remove")}</button>` : ""}
-      </div></div>`;
+        ${!c && lc ? `<button data-action="cal-light-remove">${this.t("cal_remove")}</button>` : ""}
+      </div><small>${this.t("calibrate_light_help")}</small></div>`;
   }
 
-  openCalibration() {
+  openCalibration(lightOnly = false) {
     const d = this._state.draft;
     if (!d.id || !this._state.devices.some((x) => x.id === d.id)) return this.toast(this.t("calibrate_save_first"), true);
     if (!d.options.light_state_entity) return this.toast(this.t("calibrate_need_meter"), true);
-    this._state.dialog = { kind: "calibrate", stage: "idle", lines: [], result: null };
+    this._state.dialog = { kind: "calibrate", lightOnly, stage: "idle", lines: [], result: null };
     this.render();
   }
 
@@ -1276,7 +1302,7 @@ class RFDevicesPanel extends HTMLElement {
         if (ev.stage === "done") { dlg.stage = "done"; dlg.result = ev.calibration; this._stopLearn(); }
         if (ev.stage === "error") { dlg.stage = "error"; dlg.message = ev.message; this._stopLearn(); }
         this.render();
-      }, { type: "rf_devices/calibrate", device_id: this._state.draft.id });
+      }, { type: "rf_devices/calibrate", device_id: this._state.draft.id, light_only: !!dlg.lightOnly });
     } catch (e) {
       Object.assign(dlg, { stage: "error", message: e.message });
       this.render();
@@ -1850,17 +1876,17 @@ class RFDevicesPanel extends HTMLElement {
         <div class="actions"><span class="spacer"></span><button data-action="analyze">${this.t("analyze")}</button></div>
         ${this.renderResult(dlg.result)}`;
     } else if (dlg.kind === "calibrate") {
-      title = this.t("calibrate_title");
+      title = this.t(dlg.lightOnly ? "calibrate_light" : "calibrate_title");
       const speeds = this._state.draft.options.speeds || 3;
       const lines = dlg.lines.map((l) => `<div class="${l.wait ? "sub" : ""}">${esc(l.wait || l.text)}</div>`).join("");
       if (dlg.stage === "idle")
-        body = `<p>${this.t("calibrate_intro")}</p><p class="warn-text">${this.t("calibrate_before", { min: Math.ceil((speeds * 2 * 130 + 60) / 60) })}</p>
+        body = `<p>${this.t(dlg.lightOnly ? "calibrate_light_intro" : "calibrate_intro")}</p><p class="warn-text">${dlg.lightOnly ? this.t("calibrate_light_before") : this.t("calibrate_before", { min: Math.ceil((speeds * 2 * 130 + 60) / 60) })}</p>
           <div class="actions"><span class="spacer"></span><button class="primary" data-action="cal-start">${this.t("start")}</button></div>`;
       else if (dlg.stage === "running")
         body = `<div class="lives" data-live="draft">${this.liveInfo(this._state.draft)}</div>
           <div class="stage busy"><div class="pulse"></div><div class="cal-lines">${lines}</div></div>`;
       else if (dlg.stage === "done")
-        body = `<div class="cal-lines">${lines}</div><p>${this.t("cal_done")}</p>${this.calibrationTable(dlg.result)}
+        body = `<div class="cal-lines">${lines}</div><p>${this.t(dlg.lightOnly ? "cal_light_done" : "cal_done")}</p>${dlg.lightOnly ? this.lampSummary(dlg.result) : this.calibrationTable(dlg.result)}
           <div class="actions"><span class="spacer"></span><button class="primary" data-action="cal-save">${this.t("cal_save")}</button></div>`;
       else
         body = `<div class="cal-lines">${lines}</div><p class="warn-text">${esc(this.t("st_error", { msg: dlg.message || "" }))}</p>
@@ -2127,11 +2153,23 @@ class RFDevicesPanel extends HTMLElement {
         this.dirty();
         return this.render();
       case "calibrate": return this.openCalibration();
+      case "calibrate-light": return this.openCalibration(true);
       case "cal-start": return this.startCalibration();
-      case "cal-save":
-        this._state.draft.options.calibration = dlg.result;
+      case "cal-save": {
+        const o = this._state.draft.options;
+        if (!dlg.lightOnly) o.calibration = dlg.result;
+        else if (o.calibration) {
+          // A full table exists: refresh its lamp values and the "with light" column.
+          const lamp = dlg.result.light - dlg.result.idle;
+          o.calibration = { ...o.calibration, idle: dlg.result.idle, light: dlg.result.light, light_modes: dlg.result.light_modes,
+            speeds: o.calibration.speeds.map(([off]) => [off, Math.round((off + lamp) * 10) / 10]) };
+        } else o.light_calibration = dlg.result;
         this._state.dialog = null;
         return this.saveDraft();
+      }
+      case "cal-light-remove":
+        this._state.draft.options.light_calibration = null;
+        return this.render();
       case "cal-remove":
         this._state.draft.options.calibration = null;
         return this.render();

@@ -494,3 +494,50 @@ async def test_live_calibration_needs_the_lamp_off_and_own_speed(hass: HomeAssis
     await asyncio.sleep(0.6)
     stop()
     assert not learned
+
+
+def test_lamp_from_jump_and_level() -> None:
+    from custom_components.rf_devices.calibration import lamp_from_jump, lamp_from_level
+
+    cal = {"idle": 0.0, "light": 22.5}
+    assert lamp_from_jump(cal, 5.0, 27.4) is True  # lamp on while the fan runs
+    assert lamp_from_jump(cal, 27.4, 5.2) is False
+    assert lamp_from_jump(cal, 0.4, 18.0) is True  # a lamp lighting over two readings: first step
+    assert lamp_from_jump(cal, 5.0, 6.2) is None  # the motor ramping
+    assert lamp_from_jump(cal, 3.0, 40.0) is None  # far larger than the lamp
+    assert lamp_from_level(cal, 22.4) is True
+    assert lamp_from_level(cal, 1.0) is False
+
+
+async def test_quick_light_calibration_measures_only_the_lamp() -> None:
+    from custom_components.rf_devices import calibration as cal
+
+    class FakeMeter:
+        direct = True
+
+        def __init__(self) -> None:
+            self.watts = 0.4
+
+        async def async_read(self) -> float:
+            return self.watts
+
+    meter = FakeMeter()
+    seen = []
+
+    async def set_light(on: bool) -> None:
+        seen.append(on)
+        meter.watts = 22.9 if on else 0.4
+
+    async def fast_lamp(m):
+        return m.watts, 0.0, True
+
+    import pytest
+    mp = pytest.MonkeyPatch()
+    mp.setattr(cal, "async_wait_lamp", fast_lamp)
+    events = [e async for e in cal.async_calibrate_light(meter, set_light)]
+    mp.undo()
+    done = events[-1]
+    assert done["stage"] == "done"
+    assert done["calibration"]["idle"] == 0.4 and done["calibration"]["light"] == 22.9
+    assert "speeds" not in done["calibration"]
+    assert seen == [True, False]  # light on, then off again

@@ -12,7 +12,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from . import codec
-from .calibration import async_calibrate, read_watts
+from .calibration import async_calibrate, async_calibrate_light, read_watts
 from .const import DEVICE_TYPES, DOMAIN, MAX_SPEEDS, VERSION
 from .entity import find_by_unique_id
 from .hub import LearnError, RFHub, capture_result
@@ -339,7 +339,11 @@ IDLE_MAX_W = 3.0  # the fan and its light must be off (below this) to calibrate
 
 
 @websocket_api.websocket_command(
-    {vol.Required("type"): "rf_devices/calibrate", vol.Required("device_id"): str}
+    {
+        vol.Required("type"): "rf_devices/calibrate",
+        vol.Required("device_id"): str,
+        vol.Optional("light_only", default=False): bool,
+    }
 )
 @websocket_api.require_admin
 @callback
@@ -402,16 +406,22 @@ def ws_calibrate(hass, connection, msg) -> None:
             await fan.async_set_assumed_state(False)
             if light is not None:
                 await light.async_set_assumed_state(False)
-            async for event in async_calibrate(
-                Meter(hass, meter),
-                int(opts.get("speeds", 3)),
-                fan.async_calibration_speed,
-                fan.async_calibration_off,
-                set_light,
-                next_color,
-                int(opts.get("light_colors", 3)) if next_color else 1,
-                select.index if select is not None else 0,
-            ):
+            colors = int(opts.get("light_colors", 3)) if next_color else 1
+            first_mode = select.index if select is not None else 0
+            if msg["light_only"]:
+                steps = async_calibrate_light(Meter(hass, meter), set_light, next_color, colors, first_mode)
+            else:
+                steps = async_calibrate(
+                    Meter(hass, meter),
+                    int(opts.get("speeds", 3)),
+                    fan.async_calibration_speed,
+                    fan.async_calibration_off,
+                    set_light,
+                    next_color,
+                    colors,
+                    first_mode,
+                )
+            async for event in steps:
                 send(event)
             finished = True
         except Exception as err:  # noqa: BLE001 - reported to the UI

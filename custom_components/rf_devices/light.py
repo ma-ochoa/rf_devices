@@ -11,9 +11,12 @@ from homeassistant.components.light import (
     LightEntity,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.util import dt as dt_util
 
+from .calibration import lamp_from_jump, lamp_from_level, read_watts
 from .const import (
     MODE_TOGGLE,
     ROLE_LIGHT_DOWN,
@@ -42,6 +45,9 @@ async def async_setup_entry(
 
     setup_platform_entities(hass, entry, async_add_entities, "light", factory)
 
+
+LAMP_COMMAND_GRACE = 6.0  # s after our own light command: the lamp may not have lit yet
+FAN_QUIET = 90.0  # s after a fan change: the motor's ramp could look like the lamp
 
 class RFLight(OnOffMixin, LightEntity):
     """On/off light, with colour temperature and brightness when the remote has them.
@@ -146,11 +152,58 @@ class RFFanLight(RFLight):
 
     @property
     def _state_entity(self) -> str | None:
-        # With a calibration the fan's aligner decides; a plain threshold would
-        # mistake a fast-spinning motor for the lamp.
-        if self.device["options"].get("calibration"):
+        # With a calibration the fan's aligner (or the lamp watcher below)
+        # decides; a plain threshold would mistake a fast motor for the lamp.
+        opts = self.device["options"]
+        if opts.get("calibration") or opts.get("light_calibration"):
             return None
-        return self.device["options"].get(self._state_key)
+        return opts.get(self._state_key)
+
+    @property
+    def _lamp_calibration(self) -> dict | None:
+        """The quick lamp calibration, used only when there is no full one."""
+        opts = self.device["options"]
+        if opts.get("calibration") or not opts.get("light_state_entity"):
+            return None
+        return opts.get("light_calibration")
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._last_watts: float | None = None
+        if self._lamp_calibration:
+            meter = self.device["options"]["light_state_entity"]
+            self._last_watts = read_watts(self.hass, meter)
+            self.async_on_remove(
+                async_track_state_change_event(self.hass, [meter], self._lamp_reading)
+            )
+
+    @callback
+    def _lamp_reading(self, event: Event[EventStateChangedData]) -> None:
+        """Quick calibration: follow the lamp from the meter.
+
+        With the fan stopped the level tells; with it running only a sudden
+        jump of about the lamp's watts does (a motor ramps). Readings right
+        after our own command or a fan change are left alone.
+        """
+        cal = self._lamp_calibration
+        try:
+            watts = float(event.data["new_state"].state)
+        except (AttributeError, TypeError, ValueError):
+            return
+        before, self._last_watts = self._last_watts, watts
+        if cal is None or self.hub.calibrating:
+            return
+        now = self.hass.loop.time()
+        if now - max(self.user_on_at, self.user_off_at) < LAMP_COMMAND_GRACE:
+            return
+        fan = find_by_unique_id(self.hass, f"{self.device['id']}_fan")
+        fan_state = self.hass.states.get(fan.entity_id) if fan is not None else None
+        if fan_state is not None and (dt_util.utcnow() - fan_state.last_changed).total_seconds() < FAN_QUIET:
+            return  # the motor is still speeding up or slowing down
+        if fan_state is not None and fan_state.state == "off":
+            self.async_apply_measured(lamp_from_level(cal, watts))
+        elif before is not None and (on := lamp_from_jump(cal, before, watts)) is not None:
+            self.async_apply_measured(on)
 
     @callback
     def async_apply_measured(self, on: bool) -> None:

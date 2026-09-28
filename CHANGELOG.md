@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.3
+
+- Quick light calibration (1–2 min, fan stopped): measures idle and the lamp in each colour mode.
+  Without the full table, the fan's light then follows the meter: by level with the fan stopped,
+  by sudden jumps of about the lamp's watts while it runs. With a full table, it refreshes its
+  lamp values.
+- Panel: restored the missing "Power" label in the live chips.
+
 ## 0.11.2
 
 - A device's relay, wall switch or meter can no longer be one of RF Devices' own entities (panel and

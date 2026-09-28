@@ -153,6 +153,8 @@ mantenerlo correcto:
     esa velocidad. Si la lectura parece de otra velocidad (se usó el mando entretanto), se ignora.
   - Sensor **Velocidad estimada**: posición del motor entre las velocidades calibradas, en %, con
     el atributo `trend` (acelerando / frenando / estable) mientras cambia.
+- **Calibración rápida de la luz** (1–2 minutos, ventilador parado): mide solo la lámpara. Basta
+  para distinguir la luz del ventilador por sus saltos de consumo, sin esperar a cada velocidad.
 - **Botones de sincronizar** y los servicios `rf_devices.set_state`,
   `rf_devices.set_position_state` y `rf_devices.set_color_mode` corrigen el estado sin enviar
   nada.

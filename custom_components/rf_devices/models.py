@@ -139,6 +139,17 @@ CALIBRATION_SCHEMA = vol.Schema(
     }
 )
 
+# Quick calibration: only idle and the lamp (per colour mode), measured with the fan stopped.
+LIGHT_CALIBRATION_SCHEMA = vol.Schema(
+    {
+        vol.Required("idle"): vol.Coerce(float),
+        vol.Required("light"): vol.Coerce(float),
+        vol.Optional("light_modes"): [vol.Coerce(float)],
+        vol.Optional("measured"): str,
+        vol.Optional("direct"): bool,
+    }
+)
+
 _LIGHT_EXTRAS = {
     vol.Optional("light_color", default=False): bool,  # button cycling colour temperature
     vol.Optional("light_colors", default=3): vol.All(vol.Coerce(int), vol.Range(1, 6)),  # modes it cycles
@@ -268,6 +279,8 @@ OPTION_SCHEMAS = {
             ),
             # Result of the power calibration wizard (see calibration.py).
             vol.Optional("calibration", default=None): vol.Any(None, CALIBRATION_SCHEMA),
+            # Only the lamp (quick): tells the lamp from the motor without the full table.
+            vol.Optional("light_calibration", default=None): vol.Any(None, LIGHT_CALIBRATION_SCHEMA),
             # Correct the table from settled live readings after own speed commands.
             vol.Optional("live_calibration", default=True): bool,
             **_POWER,

@@ -658,3 +658,25 @@ async def test_own_entities_cannot_be_the_relay(hass, hass_storage, monkeypatch,
     assert not msg["success"] and "RF Devices entity" in msg["error"]["message"]
     state = hass.states.get(LIGHT)
     assert state is not None and state.name == "Luz de la terraza"  # untouched
+
+
+async def test_quick_light_calibration_follows_the_lamp(hass, hass_storage, monkeypatch) -> None:
+    from custom_components.rf_devices import light as light_mod
+
+    monkeypatch.setattr(light_mod, "FAN_QUIET", 0)
+    monkeypatch.setattr(light_mod, "LAMP_COMMAND_GRACE", 0)
+    t = await _setup(hass, hass_storage, monkeypatch, relay_mode="none", power_entity=None,
+                     light_calibration={"idle": 0.0, "light": 37.0})
+    assert hass.states.get(LIGHT).state == "off"
+    t.room.light = True  # someone used the original remote, fan stopped
+    t.room.publish()
+    await hass.async_block_till_done()
+    assert hass.states.get(LIGHT).state == "on"
+    await call(hass, "fan", "set_percentage", FAN, percentage=100)  # motor adds 7 W
+    t.room.publish()
+    await hass.async_block_till_done()
+    assert hass.states.get(LIGHT).state == "on"  # a motor change is not the lamp
+    t.room.light = False  # remote again, with the fan running: a -37 W jump
+    t.room.publish()
+    await hass.async_block_till_done()
+    assert hass.states.get(LIGHT).state == "off"

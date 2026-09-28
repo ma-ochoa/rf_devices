@@ -151,6 +151,8 @@ it right:
     look like another speed (the remote was used meanwhile) are ignored.
   - **Estimated speed** sensor: the motor's position between the calibrated speeds, in %, with a
     `trend` attribute (accelerating / decelerating / stable) while it ramps.
+- **Quick light calibration** (1–2 minutes, fan stopped): measures only the lamp. Enough to tell
+  the light from the fan by its sudden jumps in draw, without waiting for every speed.
 - **Sync buttons** and the services `rf_devices.set_state`, `rf_devices.set_position_state` and
   `rf_devices.set_color_mode` correct the state without sending anything.
 
