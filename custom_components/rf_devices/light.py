@@ -19,7 +19,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
-from .calibration import lamp_from_jump, lamp_from_level, read_watts
+from .calibration import lamp_from_jump, lamp_from_level, learn_lamp, read_watts
 from .const import (
     DOMAIN,
     MODE_TOGGLE,
@@ -279,6 +279,8 @@ class RFFanLight(RFLight):
                 return
             if self._fan_off():
                 self.async_apply_measured(lamp_from_level(cal, after))
+                if before is not None and (on := lamp_from_jump(cal, before, after)) is not None:
+                    self._learn_lamp(cal, after - before if on else before - after)
                 return
             # A change reported in pieces: also try from where the changes began.
             now = self.hass.loop.time()
@@ -296,6 +298,18 @@ class RFFanLight(RFLight):
     @callback
     def _fan_changed(self, _event: Event[EventStateChangedData]) -> None:
         self._schedule_lamp_check(self._lamp_quiet_left())
+
+    def _learn_lamp(self, cal: dict, watts: float) -> None:
+        """Live calibration of the lamp from a switch seen with the fan stopped."""
+        if not self.device["options"].get("live_calibration", True):
+            return
+        select = self._select()
+        mode = select.index if select is not None else None
+        old = cal.get("light_modes") or [cal["light"]]
+        if learn_lamp(cal, mode, round(watts, 2)):
+            _LOGGER.info("%s: live calibration of the lamp: %s -> %s W", self.entity_id, old, cal["light_modes"])
+            self.device["rev"] = self.device.get("rev", 0) + 1
+            self.hass.async_create_task(self.hub.store.async_save())
 
     def _fan_entity_id(self) -> str | None:
         return er.async_get(self.hass).async_get_entity_id("fan", DOMAIN, f"{self.device['id']}_fan")

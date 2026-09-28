@@ -556,3 +556,34 @@ def test_aligner_instant_light_only_on_a_lamp_sized_jump(hass) -> None:
     assert decided == []  # neither the light nor the fan is touched by a value in passing
     aligner._light_from_jump(1.8)  # now the lamp's size: off
     assert decided == [("light", False)]
+
+
+def test_learn_lamp_follows_drift_and_refuses_nonsense() -> None:
+    from custom_components.rf_devices.calibration import learn_lamp
+
+    cal = {"idle": 0.0, "light": 35.0, "light_modes": [35.0, 36.6, 36.5],
+           "speeds": [[3.6, 38.6], [6.0, 41.0]]}
+    assert learn_lamp(cal, 1, 37.8)  # warm or cold lamp: +1.2 W in mode 2
+    assert cal["light_modes"] == [35.0, 37.8, 36.5] and cal["light"] == 37.8
+    assert cal["speeds"] == [[3.6, 41.4], [6.0, 43.8]]  # "with light" follows
+    assert "lamp_2" in cal["learned"]
+    assert not learn_lamp(cal, 1, 37.9)  # too small to bother
+    assert not learn_lamp(cal, 0, 60.0)  # not the lamp (e.g. fan started with it)
+    assert not learn_lamp(cal, 0, -3.0)
+
+
+def test_aligner_learns_the_lamp_with_the_fan_stopped(hass) -> None:
+    from custom_components.rf_devices.calibration import PowerAligner
+
+    learned = []
+    cal = {"idle": 0.0, "light": 35.8, "speeds": [[3.6, 39.4]]}
+    meter = SimpleNamespace(direct=True, entity_id="sensor.power")
+    aligner = PowerAligner(hass, meter, cal, lambda e: None, speed_state=lambda: (0, False),
+                           apply_light=lambda on: None, learn_lamp=lambda mode, w: learned.append(w))
+    aligner._set_steady(0.0)
+    aligner._light_from_jump(37.6)  # the lamp switched on (instant decision)
+    aligner._set_steady(37.8)  # and settled
+    assert learned == [37.8]
+    aligner._light_from_jump(0.1)
+    aligner._set_steady(0.0)
+    assert learned == [37.8, 37.8]  # switching off tells it too

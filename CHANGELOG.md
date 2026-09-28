@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.8
+
+- Live calibration of the lamp: each time the lamp switches with the fan stopped, its real draw
+  (settled level after minus before) updates that colour mode's value, the jump size and the
+  table's "with light" column. Lamps drift with temperature (a tested one: 35.8 to 37.8 W), which
+  made the lamp read as "lamp + slowest speed". Implausible values are refused; it follows the
+  "Live calibration" option. Works with the full and the quick lamp calibration.
+
 ## 0.11.7
 
 - Instant light detection when the original remote is used: a change of about the lamp's draw from

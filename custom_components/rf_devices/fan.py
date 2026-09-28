@@ -32,7 +32,7 @@ from homeassistant.util.percentage import (
     ranged_value_to_percentage,
 )
 
-from .calibration import Estimate, PowerAligner, learn_speed
+from .calibration import Estimate, PowerAligner, learn_lamp, learn_speed
 from .const import (
     MODE_BUTTONS,
     MODE_NONE,
@@ -134,6 +134,7 @@ class RFFan(RFEntity, FanEntity):
                 self._lamp_on,
                 self._learned if opts.get("live_calibration", True) else None,
                 self._light_measured,
+                self._lamp_learned if opts.get("live_calibration", True) else None,
             )
             self._aligner = aligner
             self.async_on_remove(aligner.async_start())
@@ -173,6 +174,20 @@ class RFFan(RFEntity, FanEntity):
         light = find_by_unique_id(self.hass, f"{self.device['id']}_fan_light")
         if light is not None and hasattr(light, "async_apply_measured"):
             light.async_apply_measured(estimate.light)
+
+    @callback
+    def _lamp_learned(self, mode: int | None, watts: float) -> None:
+        """Live calibration of the lamp (its draw drifts with temperature)."""
+        calibration = self.device["options"].get("calibration")
+        if self.hub.calibrating or not calibration:
+            return
+        old = calibration.get("light_modes") or [calibration["light"]]
+        if not learn_lamp(calibration, mode, watts):
+            return
+        _LOGGER.info("%s: live calibration of the lamp (mode %s): %s -> %s W", self.entity_id,
+                     (mode or 0) + 1, old, calibration["light_modes"])
+        self.device["rev"] = self.device.get("rev", 0) + 1
+        self.hass.async_create_task(self.hub.store.async_save())
 
     @callback
     def _light_measured(self, on: bool) -> None:

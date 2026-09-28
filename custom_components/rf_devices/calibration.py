@@ -511,6 +511,36 @@ def lamp_from_jump(calibration: dict, before: float, after: float) -> bool | Non
     return None
 
 
+LAMP_LEARN_MIN_CHANGE = 0.2  # W: smaller differences are not worth a save
+LAMP_LEARN_WINDOW = 20.0  # s: the new level must settle within this after the switch
+
+
+def learn_lamp(calibration: dict, mode: int | None, lamp_w: float) -> bool:
+    """Live calibration of the lamp: its real draw, seen when it switched with the fan stopped.
+
+    Lamps drift with temperature and age (a tested one went from 35.8 to
+    37.8 W), which could make the lamp read as "lamp + slowest speed".
+    Updates that colour mode's value, the jump size and the table's "with
+    light" column. Implausible values (beyond the jump tolerance) are refused.
+    Works on the full calibration and on the quick lamp-only one.
+    """
+    idle = calibration["idle"]
+    modes = list(calibration.get("light_modes") or [calibration["light"]])
+    index = mode if mode is not None and 0 <= mode < len(modes) else 0
+    known = modes[index] - idle
+    if lamp_w <= 0 or abs(lamp_w - known) > max(LAMP_JUMP_MIN_W, known * LAMP_JUMP_PCT):
+        return False
+    if abs(lamp_w - known) < LAMP_LEARN_MIN_CHANGE:
+        return False
+    modes[index] = round(idle + lamp_w, 2)
+    calibration["light_modes"] = modes
+    calibration["light"] = modes[index]
+    if "speeds" in calibration:
+        calibration["speeds"] = [[off, round(off + lamp_w, 2)] for off, _on in calibration["speeds"]]
+    calibration.setdefault("learned", {})[f"lamp_{index + 1}"] = dt_util.utcnow().isoformat()
+    return True
+
+
 def lamp_from_level(calibration: dict, watts: float) -> bool:
     """With the fan stopped, the lamp is on when the draw is past half its watts."""
     lamp = calibration["light"] - calibration["idle"]
@@ -633,9 +663,12 @@ class PowerAligner:
         lamp_on: Callable[[], bool | None] = lambda: None,
         learn: Callable[[int, str, float], None] | None = None,
         apply_light: Callable[[bool], None] | None = None,
+        learn_lamp: Callable[[int | None, float], None] | None = None,
     ) -> None:
         self.hass = hass
         self._apply_light = apply_light
+        self._learn_lamp = learn_lamp
+        self._lamp_switch: tuple[float, bool, float] | None = None  # (level before, on, when)
         self._steady: float | None = None  # last steady reading
         self._steady_before: float | None = None  # the steady level before the last change
         self.meter = meter
@@ -768,7 +801,20 @@ class PowerAligner:
     def _set_steady(self, watts: float) -> None:
         if self._steady is not None and abs(watts - self._steady) > STEADY_W:
             self._steady_before = self._steady  # a new level: remember where it came from
+            self._lamp_settled(watts)
         self._steady = watts
+
+    def _lamp_settled(self, level: float) -> None:
+        """The level after a lamp switch settled: learn the lamp's real draw (fan stopped only)."""
+        switch, self._lamp_switch = self._lamp_switch, None
+        if switch is None or self._learn_lamp is None:
+            return
+        before, on, when = switch
+        if self.hass.loop.time() - when > LAMP_LEARN_WINDOW or self._speed_state()[0] != 0:
+            return
+        lamp = level - before if on else before - level
+        if lamp_from_jump(self.calibration, before, level) is not None:
+            self._learn_lamp(self._light_mode(), round(lamp, 2))
 
     def _light_from_jump(self, watts: float) -> None:
         """Instant light decision: a change of about the lamp's draw from the last steady value.
@@ -782,6 +828,8 @@ class PowerAligner:
         if (on := lamp_from_jump(self.calibration, self._steady, watts)) is not None:
             _LOGGER.debug("Meter %s: %s -> %s W, lamp %s", self.meter.entity_id, self._steady, watts,
                           "on" if on else "off")
+            if self._lamp_switch is None or self._lamp_switch[1] != on:
+                self._lamp_switch = (self._steady, on, self.hass.loop.time())
             self._apply_light(on)
 
     def _apply_quick(self, watts: float) -> Estimate | None:
