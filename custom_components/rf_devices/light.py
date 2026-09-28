@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from homeassistant.components.light import (
@@ -50,7 +51,11 @@ async def async_setup_entry(
 
 
 LAMP_COMMAND_GRACE = 6.0  # s after our own light command: the lamp may not have lit yet
+LAMP_DRIFT_W = 1.0  # smaller changes are drift, not a switch
+LAMP_SETTLE_READS, LAMP_SETTLE_EVERY = 12, 1.0  # after a change: read until 3 agree
+LAMP_JOIN_WINDOW = 20.0  # s: changes this close together may be one lamp switch in pieces
 FAN_QUIET = 90.0  # s after a fan change: the motor's ramp could look like the lamp
+FAN_QUIET_LIVE = 15.0  # ... with a live meter, settling is checked reading by reading
 
 class RFLight(OnOffMixin, LightEntity):
     """On/off light, with colour temperature and brightness when the remote has them.
@@ -174,9 +179,13 @@ class RFFanLight(RFLight):
         await super().async_added_to_hass()
         self._last_watts: float | None = None
         self._lamp_timer = None
+        self._lamp_settling: asyncio.Task | None = None
+        self._meter_live = False
+        self._jump_origin: tuple[float, float] | None = None  # (watts, loop time) before a change
         if self._lamp_calibration:
             meter = self.device["options"]["light_state_entity"]
             self._last_watts = read_watts(self.hass, meter)
+            self._meter_live = Meter(self.hass, meter).direct
             self.async_on_remove(
                 async_track_state_change_event(self.hass, [meter], self._lamp_reading)
             )
@@ -200,7 +209,6 @@ class RFFanLight(RFLight):
             watts = float(event.data["new_state"].state)
         except (AttributeError, TypeError, ValueError):
             return
-        before, self._last_watts = self._last_watts, watts
         if cal is None or self.hub.calibrating:
             return
         if (wait := self._lamp_quiet_left()) > 0:
@@ -208,10 +216,50 @@ class RFFanLight(RFLight):
             # since the meter may not report anything new by then.
             self._schedule_lamp_check(wait)
             return
-        if self._fan_off():
-            self.async_apply_measured(lamp_from_level(cal, watts))
-        elif before is not None and (on := lamp_from_jump(cal, before, watts)) is not None:
-            self.async_apply_measured(on)
+        if self._last_watts is None or abs(watts - self._last_watts) < LAMP_DRIFT_W:
+            self._last_watts = watts  # small drift: the new baseline
+            return
+        if self._lamp_settling is None:
+            self._lamp_settling = self.hass.async_create_task(self._async_lamp_settle())
+
+    async def _async_lamp_settle(self) -> None:
+        """A change started: read until it settles, then compare settled with settled.
+
+        A lamp may light in two steps and a meter may report a change in two
+        pieces, so a single reading-to-reading jump can miss it.
+        """
+        try:
+            cal = self._lamp_calibration
+            meter = Meter(self.hass, self.device["options"]["light_state_entity"])
+            before, recent = self._last_watts, []
+            for _ in range(LAMP_SETTLE_READS):
+                value = await meter.async_read()
+                if value is not None:
+                    recent = [*recent, value][-3:]
+                    if len(recent) == 3 and max(recent) - min(recent) <= LAMP_DRIFT_W:
+                        break
+                await asyncio.sleep(LAMP_SETTLE_EVERY)
+            if not recent or cal is None:
+                return
+            after = recent[-1]
+            self._last_watts = after
+            if self._lamp_quiet_left() > 0:
+                return
+            if self._fan_off():
+                self.async_apply_measured(lamp_from_level(cal, after))
+                return
+            # A change reported in pieces: also try from where the changes began.
+            now = self.hass.loop.time()
+            origin = self._jump_origin if self._jump_origin and now - self._jump_origin[1] < LAMP_JOIN_WINDOW else None
+            for start in (before, origin[0] if origin else None):
+                if start is not None and (on := lamp_from_jump(cal, start, after)) is not None:
+                    self._jump_origin = None
+                    self.async_apply_measured(on)
+                    return
+            if origin is None and before is not None:
+                self._jump_origin = (before, now)
+        finally:
+            self._lamp_settling = None
 
     @callback
     def _fan_changed(self, _event: Event[EventStateChangedData]) -> None:
@@ -232,7 +280,8 @@ class RFFanLight(RFLight):
         """Seconds until readings can be trusted: after our own command or a fan change."""
         own = LAMP_COMMAND_GRACE - (self.hass.loop.time() - max(self.user_on_at, self.user_off_at))
         fan = self._fan_state()
-        motor = FAN_QUIET - (dt_util.utcnow() - fan.last_changed).total_seconds() if fan else 0
+        quiet = FAN_QUIET_LIVE if self._meter_live else FAN_QUIET
+        motor = quiet - (dt_util.utcnow() - fan.last_changed).total_seconds() if fan else 0
         return max(own, motor, 0.0)
 
     @callback
@@ -259,12 +308,13 @@ class RFFanLight(RFLight):
         if (wait := self._lamp_quiet_left()) > 0:
             self._schedule_lamp_check(wait)
             return
-        if not self._fan_off():
-            return  # with the motor running only a jump can tell, and there was none
         watts = await Meter(self.hass, self.device["options"]["light_state_entity"]).async_read()
-        if watts is not None:
-            self._last_watts = watts
+        if watts is None:
+            return
+        self._last_watts = watts  # the baseline for the next jump
+        if self._fan_off():
             self.async_apply_measured(lamp_from_level(cal, watts))
+        # With the motor running only a jump can tell, and there was none.
 
     @callback
     def async_apply_measured(self, on: bool) -> None:

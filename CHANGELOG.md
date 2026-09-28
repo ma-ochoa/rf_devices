@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.5
+
+- Quick light calibration: a change is read until it settles (live, reading by reading) and the
+  settled values before and after are compared, so a lamp that lights in two steps or a meter
+  that reports a change in pieces is still recognised. With a live meter the wait after a fan
+  change drops from 90 s to 15 s. Tested with the original remote while the fan was running and
+  stopped: the light followed in 1-3 s.
+
 ## 0.11.4
 
 - Shelly Gen1 meters (e.g. Shelly 1PM) are read live from `/status`, like Gen2+ ones: exact lamp

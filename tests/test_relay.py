@@ -699,3 +699,28 @@ async def test_lamp_rechecked_after_the_fan_settles(hass, hass_storage, monkeypa
     await asyncio.sleep(1.0)  # no new meter report; the deferred check reads it again
     await hass.async_block_till_done()
     assert hass.states.get(LIGHT).state == "on"
+
+
+async def test_lamp_jump_reported_in_two_pieces(hass, hass_storage, monkeypatch) -> None:
+    """The meter reports the lamp going off in two steps while the fan runs."""
+    from custom_components.rf_devices import light as light_mod
+
+    monkeypatch.setattr(light_mod, "FAN_QUIET", 0)
+    monkeypatch.setattr(light_mod, "LAMP_COMMAND_GRACE", 0)
+    monkeypatch.setattr(light_mod, "LAMP_SETTLE_EVERY", 0.05)
+    await _setup(hass, hass_storage, monkeypatch, relay_mode="none", power_entity=None,
+                 light_calibration={"idle": 0.0, "light": 37.0})
+    await call(hass, "fan", "set_percentage", FAN, percentage=100)
+    await call(hass, "light", "turn_on", LIGHT)
+    hass.states.async_set(METER, "44.0", {"unit_of_measurement": "W"})
+    await hass.async_block_till_done()
+    await asyncio.sleep(0.3)
+    assert hass.states.get(LIGHT).state == "on"
+    hass.states.async_set(METER, "25.0", {"unit_of_measurement": "W"})  # first piece: -19 W
+    await hass.async_block_till_done()
+    await asyncio.sleep(0.05)
+    hass.states.async_set(METER, "7.0", {"unit_of_measurement": "W"})  # second piece
+    await hass.async_block_till_done()
+    await asyncio.sleep(0.5)
+    await hass.async_block_till_done()
+    assert hass.states.get(LIGHT).state == "off"  # settled vs settled: -37 W, the lamp
