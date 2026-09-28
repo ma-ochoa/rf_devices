@@ -644,3 +644,17 @@ async def test_diagnostics_summarise_devices(hass, hass_storage, monkeypatch) ->
     assert device["relay"]["wall_gestures"]["actions"][2] == "fan_step"
     assert device["commands"]["speed_1"]["kind"] == "rf433"
     assert "code" not in device["commands"]["speed_1"]  # codes are summarised, not included
+
+
+async def test_own_entities_cannot_be_the_relay(hass, hass_storage, monkeypatch, hass_ws_client) -> None:
+    """Choosing the device's own light as its relay (and taking its name) renamed it after itself."""
+    await _setup(hass, hass_storage, monkeypatch, relay_mode="coupled")
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": "rf_devices/devices"})
+    device = (await ws.receive_json())["result"][0]
+    bad = {**device, "options": {**device["options"], "power_entity": LIGHT, "take_relay_name": True}}
+    await ws.send_json({"id": 2, "type": "rf_devices/device/save", "device": bad})
+    msg = await ws.receive_json()
+    assert not msg["success"] and "RF Devices entity" in msg["error"]["message"]
+    state = hass.states.get(LIGHT)
+    assert state is not None and state.name == "Luz de la terraza"  # untouched

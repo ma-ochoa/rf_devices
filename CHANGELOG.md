@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.2
+
+- A device's relay, wall switch or meter can no longer be one of RF Devices' own entities (panel and
+  server). Choosing the device's own light as its relay and taking the relay's name renamed that
+  light after itself.
+
 ## 0.11.1
 
 - Live calibration no longer blocked by wizard values taken too early: order and "reads as another

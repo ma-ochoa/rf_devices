@@ -171,6 +171,7 @@ async def ws_device_save(hass, connection, msg) -> None:
                 msg["id"], "stale", "The device was changed elsewhere; reloaded the current version"
             )
             return
+        _refuse_own_sources(hass, validated)
         await apply_relay_identity(hass, hub, previous, validated)
         device = await hub.store.async_upsert(validated)
     except (vol.Invalid, LearnError) as err:
@@ -522,6 +523,22 @@ async def ws_relay_apply(hass, connection, msg) -> None:
 def relay_switch_name(name: str, prefix: str) -> str:
     """"Luz de la terraza" -> "Interruptor luz de la terraza"."""
     return f"{prefix} {name[:1].lower()}{name[1:]}".strip()
+
+
+SOURCE_OPTIONS = ("power_entity", "switch_entity", "state_entity", "light_state_entity")
+
+
+def _refuse_own_sources(hass: HomeAssistant, device: dict) -> None:
+    """A relay, wall switch or meter must be a real device, not an RF Devices entity.
+
+    Picking the device's own light as its "relay" and then taking the relay's
+    name would rename that light after itself ("Switch …").
+    """
+    reg = er.async_get(hass)
+    for key in SOURCE_OPTIONS:
+        entity_id = device["options"].get(key)
+        if entity_id and (entry := reg.async_get(entity_id)) and entry.platform == DOMAIN:
+            raise LearnError(f"{entity_id} is an RF Devices entity: choose the real relay, switch or meter")
 
 
 async def apply_relay_identity(hass: HomeAssistant, hub: RFHub, old: dict | None, new: dict) -> None:

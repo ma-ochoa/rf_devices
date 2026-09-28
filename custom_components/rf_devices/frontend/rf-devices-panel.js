@@ -1161,10 +1161,16 @@ class RFDevicesPanel extends HTMLElement {
       ${devices.length ? `<div class="grid">${cards}</div>` : `<div class="empty">${this.t("empty")}</div>`}`;
   }
 
+  /** Entities RF Devices itself creates: never a relay, wall switch or meter of a device. */
+  ownEntities() {
+    return new Set(this._state.devices.flatMap((d) => d.entities || []));
+  }
+
   entityOptions(filter, selected) {
     const st = this._hass.states;
+    const own = this.ownEntities();
     return Object.keys(st)
-      .filter((e) => filter(e, st[e]))
+      .filter((e) => (!own.has(e) || e === selected) && filter(e, st[e]))
       .sort()
       .map((e) => `<option value="${e}" ${selected === e ? "selected" : ""}>${esc(st[e].attributes.friendly_name || e)} (${e})</option>`)
       .join("");
