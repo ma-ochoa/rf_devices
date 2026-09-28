@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1
+
+- Live calibration no longer blocked by wizard values taken too early: order and "reads as another
+  speed" are checked only against values already learned live, and larger corrections (up to
+  60 %) are accepted. On the tested fan the whole table was ~30 % low.
+
 ## 0.11.0
 
 - Live calibration: after an own speed command, with the light off, the settled draw (up to

@@ -74,7 +74,7 @@ LEARN_HOLD = 120.0  # s the reading must stay flat
 LEARN_SPREAD_W, LEARN_SPREAD_PCT = 0.3, 0.015  # allowed spread within LEARN_HOLD
 LEARN_MAX_SLOPE = 0.1 / 60  # W/s (0.1 W per minute)
 LEARN_STEP_W = 0.2  # learn again when the settled value moves this much
-LEARN_MAX_CHANGE_W, LEARN_MAX_CHANGE_PCT = 1.0, 0.35  # larger corrections are refused
+LEARN_MAX_CHANGE_W, LEARN_MAX_CHANGE_PCT = 1.0, 0.60  # larger corrections are refused
 TREND_WINDOW = 60.0  # s of readings for the speed-estimate trend
 TREND_SLOPE = 0.3 / 60  # W/s: faster than this = accelerating / decelerating
 
@@ -320,9 +320,10 @@ def learn_speed(
 ) -> bool:
     """Correct one speed's value from a settled live reading (motor only, lamp off).
 
-    Refused when the value would break the order of the table, when it is
-    closer to another speed than to this one (someone used the remote
-    meanwhile), or when the change is implausibly large. Returns whether the
+    Refused when the value would break the order of the values already
+    learned live, when it matches another learned speed within its band
+    (someone used the remote meanwhile), or when the change is implausibly
+    large. Returns whether the
     table changed.
     """
     speeds = calibration["speeds"]
@@ -334,12 +335,25 @@ def learn_speed(
     old = values[speed - 1][col]
     if abs(watts - old) > max(LEARN_MAX_CHANGE_W, abs(old) * LEARN_MAX_CHANGE_PCT):
         return False
-    same = [v[col] for v in values]
-    if (speed > 1 and watts <= same[speed - 2]) or (speed < count and watts >= same[speed]):
+    # Only values already confirmed live are trusted as neighbours: a wizard
+    # value taken too early (the top speed of the terrace fan: 18.66 W, really
+    # ~25 W) would otherwise block every speed below it.
+    learned = calibration.get("learned") or {}
+
+    def trusted(index: int, column: int) -> float | None:
+        key = f"{index + 1}_{'up' if column == 0 else 'down'}"
+        return values[index][column] if key in learned else None
+
+    below = trusted(speed - 2, col) if speed > 1 else None
+    above = trusted(speed, col) if speed < count else None
+    if (below is not None and watts <= below) or (above is not None and watts >= above):
         return False
-    own = min(abs(watts - x) for x in values[speed - 1])
-    others = [x for i, v in enumerate(values) if i != speed - 1 for x in v]
-    if others and min(abs(watts - x) for x in others) < own:
+    # It reads as another speed already learned (the remote was used meanwhile).
+    others = [
+        x for i in range(count) if i != speed - 1
+        for x in (trusted(i, 0), trusted(i, 1)) if x is not None
+    ]
+    if any(abs(watts - x) <= speed_band(calibration, x) for x in others):
         return False
     watts = round(watts, 2)
     downs = list(calibration.get("speeds_down") or [])

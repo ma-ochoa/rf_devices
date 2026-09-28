@@ -412,11 +412,25 @@ def test_learn_speed() -> None:
     assert table["learned"] == {"6_up": "t"}
     assert cal.learn_speed(table, 5, "down", 15.3)
     assert table["speeds_down"][4] == 15.3 and table["speeds"][4][0] == 13.73
-    # Refused: nearer to speed 5 (the remote changed it), order broken, too big.
-    assert not cal.learn_speed(table, 6, "up", 14.2)
-    assert not cal.learn_speed(table, 3, "up", 10.0)
+    # Refused against learned values: reads as speed 5 down, order broken.
+    assert not cal.learn_speed(table, 6, "up", 15.4)
+    assert not cal.learn_speed(table, 4, "down", 15.4)
+    # Too big a change, or no such speed.
     assert not cal.learn_speed(table, 1, "up", 0.5)
     assert not cal.learn_speed(table, 7, "up", 30.0)
+
+
+def test_learn_speed_is_not_blocked_by_a_wrong_wizard_value() -> None:
+    # 28/09: speed 5 going down settled at 19.6 W, above the wizard's 18.66 W
+    # for speed 6 (really ~24.8 W). The unconfirmed 6 must not block it.
+    import copy
+
+    table = copy.deepcopy(REAL)
+    assert cal.learn_speed(table, 5, "down", 19.6)
+    assert table["speeds_down"][4] == 19.6
+    assert cal.learn_speed(table, 4, "down", 15.2)  # below 5's learned value: fine
+    assert not cal.learn_speed(table, 3, "down", 14.9)  # reads as the learned 4
+    assert cal.learn_speed(table, 3, "down", 12.1)  # the whole table was ~30 % low
 
 
 @pytest.mark.parametrize(
