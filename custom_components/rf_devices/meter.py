@@ -2,9 +2,10 @@
 
 Home Assistant only learns what a Shelly pushes, and a Shelly pushes power in
 ~1 W steps, sometimes a minute apart. A ceiling fan's speeds are ~1 W apart
-and take minutes to settle, so that is too coarse. Gen2+ Shelly devices answer
-a local RPC call with the live value, so RF Devices asks them directly and
-falls back to the HA state for any other meter (or a password-protected one).
+and take minutes to settle, so that is too coarse. Shelly devices answer a
+local HTTP call with the live value (Gen2+: RPC; Gen1: ``/status``), so RF
+Devices asks them directly and falls back to the HA state for any other meter
+(or a password-protected one).
 """
 
 from __future__ import annotations
@@ -28,13 +29,16 @@ _METHODS = {
     "em1": ("EM1.GetStatus", "act_power"),
     "cover": ("Cover.GetStatus", "apower"),
 }
+# Gen1: "<mac>-relay_0-power" / "<mac>-emeter_0-power" → /status meters[0].power
+_SHELLY_GEN1_UID = re.compile(r"^[0-9A-Fa-f]{12}-(relay|emeter)_(\d+)-(power|current)$")
+_GEN1_LISTS = {"relay": "meters", "emeter": "emeters"}
 TIMEOUT = aiohttp.ClientTimeout(total=2)
 
 
 @dataclass
 class _Direct:
     url: str
-    field: str
+    path: tuple  # keys/indexes into the JSON answer
 
 
 class Meter:
@@ -65,8 +69,10 @@ class Meter:
             async with session.get(self._direct.url, timeout=TIMEOUT) as resp:
                 resp.raise_for_status()
                 data = await resp.json(content_type=None)
-            return float(data[self._direct.field])
-        except (TimeoutError, aiohttp.ClientError, KeyError, TypeError, ValueError) as err:
+            for key in self._direct.path:
+                data = data[key]
+            return float(data)
+        except (TimeoutError, aiohttp.ClientError, IndexError, KeyError, TypeError, ValueError) as err:
             # Usually a Wi-Fi hiccup: use HA's last value this time, ask again next time.
             _LOGGER.debug("Live reading of %s failed (%r); using HA's value", self.entity_id, err)
             return self.state_value()
@@ -76,15 +82,22 @@ def _shelly_source(hass: HomeAssistant, entity_id: str) -> _Direct | None:
     entry = er.async_get(hass).async_get(entity_id)
     if entry is None or entry.platform != "shelly" or not entry.config_entry_id:
         return None
-    match = _SHELLY_UID.match(entry.unique_id or "")
     config = hass.config_entries.async_get_entry(entry.config_entry_id)
-    if match is None or config is None:
+    if config is None:
         return None
     data = config.data
-    if int(data.get("gen") or 1) < 2 or data.get("password") or not data.get("host"):
+    if data.get("password") or not data.get("host"):
         return None
-    method, field = _METHODS[match.group(1)]
-    if match.group(3) == "current":
-        field = "current"
     port = data.get("port", 80)
-    return _Direct(f"http://{data['host']}:{port}/rpc/{method}?id={match.group(2)}", field)
+    uid = entry.unique_id or ""
+    if int(data.get("gen") or 1) >= 2:
+        if (match := _SHELLY_UID.match(uid)) is None:
+            return None
+        method, field = _METHODS[match.group(1)]
+        if match.group(3) == "current":
+            field = "current"
+        return _Direct(f"http://{data['host']}:{port}/rpc/{method}?id={match.group(2)}", (field,))
+    if (match := _SHELLY_GEN1_UID.match(uid)) is None or match.group(3) != "power":
+        return None
+    kind, channel = match.group(1), int(match.group(2))
+    return _Direct(f"http://{data['host']}:{port}/status", (_GEN1_LISTS[kind], channel, "power"))

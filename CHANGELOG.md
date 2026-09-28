@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.4
+
+- Shelly Gen1 meters (e.g. Shelly 1PM) are read live from `/status`, like Gen2+ ones: exact lamp
+  values in calibrations and a correct lamp check after powering the relay.
+- Calibration detects each fan's pace by itself: a reading is settled once flat for at least 15 s
+  and half the time waited (at most 60 s), with no fixed one-minute minimum. A fast motor is done
+  in ~30 s per speed; a slow PWM one is still followed for minutes.
+- Quick light calibration: the lamp is checked again once the fan has settled, even if the meter
+  reports nothing new (it could be left showing off while lit).
+
 ## 0.11.3
 
 - Quick light calibration (1–2 min, fan stopped): measures idle and the lamp in each colour mode.

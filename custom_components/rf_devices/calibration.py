@@ -38,8 +38,13 @@ SAMPLE_EVERY = 0.5  # seconds between readings of the HA state
 DIRECT_EVERY = 1.0  # seconds between live readings from the device
 LIGHT_HOLD, LIGHT_MIN, LIGHT_MAX = 4.0, 3.0, 30.0  # the lamp is instant
 LIGHT_TOLERANCE_W = 1.5
-# Motor with live readings: flat within 0.5 W (or 3 %) and < 0.6 W/min.
-FAN_HOLD, FAN_MIN, FAN_MAX = 30.0, 60.0, 300.0
+# Motor with live readings: flat within 0.5 W (or 3 %) and < 0.6 W/min, for at
+# least 15 s and at least half the time since the command (at most 60 s). Each fan's pace is
+# detected by itself: a fast motor (flat after ~20 s) is done in ~30 s, a slow
+# PWM one keeps creeping and is followed for minutes (checked on real fans: 25-29 s
+# vs 40-140 s, within 0.5 W of the final value).
+FAN_HOLD, FAN_MIN, FAN_MAX = 15.0, 10.0, 300.0
+FAN_HOLD_FRACTION, FAN_HOLD_MAX = 0.5, 60.0
 FAN_TOLERANCE_W, FAN_TOLERANCE_PCT, FAN_MAX_SLOPE = 0.5, 0.03, 0.01
 # Motor with only HA's pushed values (~1 W steps): hold longer, no slope.
 SLOW_FAN_HOLD, SLOW_FAN_MIN, SLOW_FAN_MAX = 60.0, 120.0, 300.0
@@ -106,28 +111,34 @@ async def async_wait_stable(
     tolerance_w: float,
     tolerance_pct: float = 0.05,
     max_slope: float | None = None,
+    hold_fraction: float = 0.0,
+    hold_max: float | None = None,
 ) -> tuple[float, float, bool]:
     """Wait at least ``min_wait`` s, then until the reading holds for ``hold`` s.
 
     Held means: spread within tolerance and, if ``max_slope`` is given, no
-    trend steeper than that (W/s). Returns (watts, seconds it took, settled).
+    trend steeper than that (W/s). With ``hold_fraction`` the hold grows with
+    the time already waited (a slow motor must stay flat for longer). Returns (watts, seconds it took, settled).
     Elapsed time is counted in samples rather than read from a clock, which
     keeps it deterministic (and testable).
     """
     every = DIRECT_EVERY if meter.direct else SAMPLE_EVERY
-    window: list[tuple[float, float]] = []
+    history: list[tuple[float, float]] = []
     value = None
     for step in range(int(max_wait / every)):
         elapsed = step * every
         value = await meter.async_read()
         if value is not None:
-            window.append((elapsed, value))
-            window = [(t, v) for t, v in window if t >= elapsed - hold]
+            span = max(hold, elapsed * hold_fraction)
+            if hold_max is not None:
+                span = min(span, max(hold, hold_max))
+            history.append((elapsed, value))
+            window = [(t, v) for t, v in history if t >= elapsed - span]
             values = [v for _, v in window]
             median = statistics.median(values)
             if (
-                elapsed >= max(hold, min_wait)
-                and window[0][0] <= elapsed - hold + every
+                elapsed >= max(span, min_wait)
+                and history[0][0] <= elapsed - span + every
                 and max(values) - min(values) <= max(tolerance_w, abs(median) * tolerance_pct)
                 and (max_slope is None or abs(_slope(window)) <= max_slope)
             ):
@@ -143,7 +154,8 @@ async def async_wait_lamp(meter: Meter) -> tuple[float, float, bool]:
 async def async_wait_motor(meter: Meter) -> tuple[float, float, bool]:
     if meter.direct:
         return await async_wait_stable(
-            meter, FAN_HOLD, FAN_MIN, FAN_MAX, FAN_TOLERANCE_W, FAN_TOLERANCE_PCT, FAN_MAX_SLOPE
+            meter, FAN_HOLD, FAN_MIN, FAN_MAX, FAN_TOLERANCE_W, FAN_TOLERANCE_PCT, FAN_MAX_SLOPE,
+            FAN_HOLD_FRACTION, FAN_HOLD_MAX,
         )
     return await async_wait_stable(
         meter, SLOW_FAN_HOLD, SLOW_FAN_MIN, SLOW_FAN_MAX, SLOW_FAN_TOLERANCE_W

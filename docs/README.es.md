@@ -159,7 +159,7 @@ mantenerlo correcto:
   `rf_devices.set_position_state` y `rf_devices.set_color_mode` corrigen el estado sin enviar
   nada.
 
-Con un medidor Shelly Gen2 o posterior, el consumo se lee **en directo** por su API local.
+Con un medidor Shelly (Gen1 o Gen2 y posteriores), el consumo se lee **en directo** por su API local.
 Home Assistant solo recibe de él saltos de ~1 W, demasiado gruesos para distinguir las velocidades
 de un ventilador.
 

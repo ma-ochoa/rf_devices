@@ -12,12 +12,14 @@ from homeassistant.components.light import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
 from .calibration import lamp_from_jump, lamp_from_level, read_watts
 from .const import (
+    DOMAIN,
     MODE_TOGGLE,
     ROLE_LIGHT_DOWN,
     ROLE_LIGHT_OFF,
@@ -26,6 +28,7 @@ from .const import (
     ROLE_LIGHT_UP,
 )
 from .entity import find_by_unique_id, last_on, setup_platform_entities
+from .meter import Meter
 from .models import color_kelvins, color_modes
 from .onoff import OnOffMixin
 
@@ -170,12 +173,19 @@ class RFFanLight(RFLight):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self._last_watts: float | None = None
+        self._lamp_timer = None
         if self._lamp_calibration:
             meter = self.device["options"]["light_state_entity"]
             self._last_watts = read_watts(self.hass, meter)
             self.async_on_remove(
                 async_track_state_change_event(self.hass, [meter], self._lamp_reading)
             )
+            if fan_id := self._fan_entity_id():
+                # The fan stopping is also a moment to check the lamp by level.
+                self.async_on_remove(
+                    async_track_state_change_event(self.hass, [fan_id], self._fan_changed)
+                )
+            self.async_on_remove(self._cancel_lamp_timer)
 
     @callback
     def _lamp_reading(self, event: Event[EventStateChangedData]) -> None:
@@ -193,17 +203,68 @@ class RFFanLight(RFLight):
         before, self._last_watts = self._last_watts, watts
         if cal is None or self.hub.calibrating:
             return
-        now = self.hass.loop.time()
-        if now - max(self.user_on_at, self.user_off_at) < LAMP_COMMAND_GRACE:
+        if (wait := self._lamp_quiet_left()) > 0:
+            # Too soon to trust a reading; look again (by level) once it is quiet,
+            # since the meter may not report anything new by then.
+            self._schedule_lamp_check(wait)
             return
-        fan = find_by_unique_id(self.hass, f"{self.device['id']}_fan")
-        fan_state = self.hass.states.get(fan.entity_id) if fan is not None else None
-        if fan_state is not None and (dt_util.utcnow() - fan_state.last_changed).total_seconds() < FAN_QUIET:
-            return  # the motor is still speeding up or slowing down
-        if fan_state is not None and fan_state.state == "off":
+        if self._fan_off():
             self.async_apply_measured(lamp_from_level(cal, watts))
         elif before is not None and (on := lamp_from_jump(cal, before, watts)) is not None:
             self.async_apply_measured(on)
+
+    @callback
+    def _fan_changed(self, _event: Event[EventStateChangedData]) -> None:
+        self._schedule_lamp_check(self._lamp_quiet_left())
+
+    def _fan_entity_id(self) -> str | None:
+        return er.async_get(self.hass).async_get_entity_id("fan", DOMAIN, f"{self.device['id']}_fan")
+
+    def _fan_state(self):
+        entity_id = self._fan_entity_id()
+        return self.hass.states.get(entity_id) if entity_id else None
+
+    def _fan_off(self) -> bool:
+        state = self._fan_state()
+        return state is not None and state.state == "off"
+
+    def _lamp_quiet_left(self) -> float:
+        """Seconds until readings can be trusted: after our own command or a fan change."""
+        own = LAMP_COMMAND_GRACE - (self.hass.loop.time() - max(self.user_on_at, self.user_off_at))
+        fan = self._fan_state()
+        motor = FAN_QUIET - (dt_util.utcnow() - fan.last_changed).total_seconds() if fan else 0
+        return max(own, motor, 0.0)
+
+    @callback
+    def _cancel_lamp_timer(self) -> None:
+        if self._lamp_timer is not None:
+            self._lamp_timer()
+            self._lamp_timer = None
+
+    @callback
+    def _schedule_lamp_check(self, delay: float) -> None:
+        self._cancel_lamp_timer()
+        self._lamp_timer = async_call_later(self.hass, delay + 0.5, self._lamp_check_later)
+
+    @callback
+    def _lamp_check_later(self, _now) -> None:
+        self._lamp_timer = None
+        self.hass.async_create_task(self._async_lamp_check())
+
+    async def _async_lamp_check(self) -> None:
+        """Deferred check by level, with a fresh (live when possible) reading."""
+        cal = self._lamp_calibration
+        if cal is None or self.hub.calibrating:
+            return
+        if (wait := self._lamp_quiet_left()) > 0:
+            self._schedule_lamp_check(wait)
+            return
+        if not self._fan_off():
+            return  # with the motor running only a jump can tell, and there was none
+        watts = await Meter(self.hass, self.device["options"]["light_state_entity"]).async_read()
+        if watts is not None:
+            self._last_watts = watts
+            self.async_apply_measured(lamp_from_level(cal, watts))
 
     @callback
     def async_apply_measured(self, on: bool) -> None:

@@ -156,7 +156,7 @@ it right:
 - **Sync buttons** and the services `rf_devices.set_state`, `rf_devices.set_position_state` and
   `rf_devices.set_color_mode` correct the state without sending anything.
 
-With a Shelly Gen2+ meter the power is read **live** through its local API. Home Assistant only
+With a Shelly meter (Gen1 or Gen2+) the power is read **live** through its local API. Home Assistant only
 gets ~1 W steps from it, which is too coarse for fan speeds.
 
 <p align="center"><img src="https://raw.githubusercontent.com/ma-ochoa/rf_devices/main/docs/images/en/power.png" alt="Power calibration" width="820"></p>

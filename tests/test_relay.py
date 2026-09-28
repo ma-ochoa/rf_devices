@@ -680,3 +680,22 @@ async def test_quick_light_calibration_follows_the_lamp(hass, hass_storage, monk
     t.room.publish()
     await hass.async_block_till_done()
     assert hass.states.get(LIGHT).state == "off"
+
+
+async def test_lamp_rechecked_after_the_fan_settles(hass, hass_storage, monkeypatch) -> None:
+    """The lamp lit while the fan was changing, and the meter then stayed flat: check again later."""
+    from custom_components.rf_devices import light as light_mod
+
+    monkeypatch.setattr(light_mod, "FAN_QUIET", 0.3)
+    monkeypatch.setattr(light_mod, "LAMP_COMMAND_GRACE", 0)
+    t = await _setup(hass, hass_storage, monkeypatch, relay_mode="none", power_entity=None,
+                     light_calibration={"idle": 0.0, "light": 37.0})
+    await call(hass, "fan", "set_percentage", FAN, percentage=50)
+    await call(hass, "fan", "turn_off", FAN)  # fan just changed: readings are not trusted yet
+    t.room.light, t.room.speed = True, 0
+    t.room.publish()
+    await hass.async_block_till_done()
+    assert hass.states.get(LIGHT).state == "off"  # too soon
+    await asyncio.sleep(1.0)  # no new meter report; the deferred check reads it again
+    await hass.async_block_till_done()
+    assert hass.states.get(LIGHT).state == "on"

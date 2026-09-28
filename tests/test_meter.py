@@ -87,3 +87,41 @@ async def test_live_meter_subscription(hass: HomeAssistant, hass_ws_client, aioc
     assert (await ws.receive_json())["success"]
     ev = (await ws.receive_json(timeout=5))["event"]
     assert ev == {"watts": 36.4, "direct": True}
+
+
+async def test_reads_shelly_gen1_live(hass: HomeAssistant, aioclient_mock) -> None:
+    entry = MockConfigEntry(domain="shelly", data={"host": "192.168.1.60", "gen": 1, "model": "SHSW-PM"})
+    entry.add_to_hass(hass)
+    ent = er.async_get(hass).async_get_or_create(
+        "sensor", "shelly", "F4CFA2E37DD7-relay_0-power", config_entry=entry,
+        suggested_object_id="luz_matrimonio_power",
+    )
+    hass.states.async_set(ent.entity_id, "22.0", {"unit_of_measurement": "W"})
+    aioclient_mock.get("http://192.168.1.60:80/status", json={"meters": [{"power": 22.53, "is_valid": True}]})
+    meter = Meter(hass, ent.entity_id)
+    assert meter.direct
+    assert await meter.async_read() == 22.53
+
+
+class _Fast:
+    """A fast motor: overshoots, then flat after ~20 s (bedroom fan, real shape)."""
+
+    direct = True
+
+    def __init__(self) -> None:
+        self.t = -1.0
+
+    async def async_read(self) -> float:
+        self.t += 1.0
+        if self.t < 5:
+            return 22.7 + self.t * 4
+        if self.t < 20:
+            return round(43.8 - (self.t - 5) * 0.16, 2)
+        return 41.45
+
+
+async def test_fast_motor_settles_by_itself(monkeypatch) -> None:
+    monkeypatch.setattr(cal, "asyncio", SimpleNamespace(sleep=_no_sleep))
+    watts, took, settled = await cal.async_wait_motor(_Fast())
+    assert settled and watts == 41.5  # rounded to 0.1 W
+    assert took <= 45  # no fixed minute: a fast fan is done in well under a minute
