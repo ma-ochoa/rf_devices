@@ -134,6 +134,8 @@ CALIBRATION_SCHEMA = vol.Schema(
         # Speed matching band: max(band_w, band_pct × speed's draw).
         vol.Optional("band_w"): vol.All(vol.Coerce(float), vol.Range(0.1, 20)),
         vol.Optional("band_pct"): vol.All(vol.Coerce(float), vol.Range(0.01, 1)),
+        # When each value was last corrected by the live calibration ("<speed>_<up|down>").
+        vol.Optional("learned"): {str: str},
     }
 )
 
@@ -266,6 +268,8 @@ OPTION_SCHEMAS = {
             ),
             # Result of the power calibration wizard (see calibration.py).
             vol.Optional("calibration", default=None): vol.Any(None, CALIBRATION_SCHEMA),
+            # Correct the table from settled live readings after own speed commands.
+            vol.Optional("live_calibration", default=True): bool,
             **_POWER,
         }
     ),
@@ -380,6 +384,7 @@ def entity_plan(device: dict) -> list[tuple[str, str]]:
         plan.append(("sensor", "power"))
     if kind == TYPE_FAN and opts.get("calibration") and opts.get("light_state_entity"):
         plan.append(("sensor", "estimate"))
+        plan.append(("sensor", "speed_estimate"))
     if opts.get("power_entity"):
         plan.append(("binary_sensor", "powered"))
     if color_modes(device) > 1 and "light_color" in device.get("commands", {}):

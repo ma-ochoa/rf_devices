@@ -10,13 +10,21 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfPower
+from homeassistant.const import PERCENTAGE, UnitOfPower
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 
-from .calibration import classify, read_watts
+from .calibration import (
+    TREND_SLOPE,
+    TREND_WINDOW,
+    _lamp_offset,
+    _slope,
+    classify,
+    read_watts,
+    speed_position,
+)
 from .const import DOMAIN
 from .entity import RFEntity, feedback_on, find_by_unique_id, setup_platform_entities
 from .meter import Meter
@@ -31,7 +39,11 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     def factory(hub, device, key):
-        return RFPowerSensor(hub, device, key) if key == "power" else RFEstimateSensor(hub, device, key)
+        if key == "power":
+            return RFPowerSensor(hub, device, key)
+        if key == "speed_estimate":
+            return RFSpeedEstimateSensor(hub, device, key)
+        return RFEstimateSensor(hub, device, key)
 
     setup_platform_entities(hass, entry, async_add_entities, "sensor", factory)
 
@@ -156,3 +168,68 @@ class RFEstimateSensor(_MeterMirror):
     def extra_state_attributes(self) -> dict:
         watts, estimate = self._estimate()
         return {"watts": watts, "speed": estimate.speed if estimate else None}
+
+
+class RFSpeedEstimateSensor(RFEstimateSensor):
+    """Approximate fan speed in %, followed continuously while the motor ramps.
+
+    The motor's draw (the lamp's subtracted when it is on) is placed between
+    the calibrated speeds, so a PWM motor speeding up or slowing down shows
+    where it is on its way; ``trend`` tells which way it is going.
+    """
+
+    _attr_translation_key = "speed_estimate"
+    _attr_device_class = None
+    _attr_options = None
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+
+    def __init__(self, hub, device, key) -> None:
+        super().__init__(hub, device, key)
+        self._history: list[tuple[float, float]] = []
+        self._position: float | None = None
+        self._trend = "stable"
+
+    @callback
+    def _meter_changed(self, event: Event[EventStateChangedData]) -> None:
+        self._update()
+        super()._meter_changed(event)
+
+    def _update(self) -> None:
+        watts, estimate = self._estimate()
+        if watts is None:
+            return
+        now = self.hass.loop.time()
+        self._history = [(t, v) for t, v in self._history if t >= now - TREND_WINDOW]
+        self._history.append((now, watts))
+        slope = _slope(self._history) if len(self._history) > 2 else 0.0
+        self._trend = (
+            "accelerating" if slope > TREND_SLOPE else "decelerating" if slope < -TREND_SLOPE else "stable"
+        )
+        if estimate is None:
+            self._position = None
+            return
+        if not estimate.fan_on:
+            self._position = 0.0
+            return
+        calibration = self.device["options"]["calibration"]
+        motor = watts - (_lamp_offset(calibration, estimate.light_mode) if estimate.light else 0.0)
+        direction = {"accelerating": "up", "decelerating": "down"}.get(self._trend)
+        self._position = speed_position(calibration, motor, direction)
+
+    @property
+    def native_value(self) -> float | None:
+        if self._position is None:
+            return None
+        speeds = len(self.device["options"]["calibration"]["speeds"])
+        return round(self._position / speeds * 100, 1)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        watts, _ = self._estimate()
+        return {
+            "watts": watts,
+            "speed": None if self._position is None else round(self._position, 2),
+            "trend": self._trend,
+        }

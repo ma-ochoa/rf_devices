@@ -32,7 +32,7 @@ from homeassistant.util.percentage import (
     ranged_value_to_percentage,
 )
 
-from .calibration import Estimate, PowerAligner
+from .calibration import Estimate, PowerAligner, learn_speed
 from .const import (
     MODE_BUTTONS,
     MODE_NONE,
@@ -91,6 +91,7 @@ class RFFan(RFEntity, FanEntity):
         # from a reading): the aligner never overrules it if the reading fits.
         self._own_speed = False
         self._gap: float | None = None  # pause before the first command after a power-up
+        self._aligner: PowerAligner | None = None
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -130,7 +131,10 @@ class RFFan(RFEntity, FanEntity):
                 self._color_index,
                 self._colour_from_jump,
                 self._speed_state,
+                self._lamp_on,
+                self._learned if opts.get("live_calibration", True) else None,
             )
+            self._aligner = aligner
             self.async_on_remove(aligner.async_start())
 
     @callback
@@ -171,6 +175,32 @@ class RFFan(RFEntity, FanEntity):
         if not self.is_on:
             return 0, False
         return self._last_speed, self._own_speed
+
+    @callback
+    def _lamp_on(self) -> bool | None:
+        if self.device["options"].get("light", MODE_NONE) == MODE_NONE:
+            return False  # no lamp on this fan
+        light = find_by_unique_id(self.hass, f"{self.device['id']}_fan_light")
+        return light.is_on if light is not None else None
+
+    @callback
+    def _learned(self, speed: int, direction: str, watts: float) -> None:
+        """Live calibration: the motor settled after an own command; correct the table."""
+        calibration = self.device["options"].get("calibration")
+        if self.hub.calibrating or not calibration:
+            return
+        old = calibration["speeds"][speed - 1][0] if direction == "up" else (
+            (calibration.get("speeds_down") or [None] * speed)[speed - 1]
+        )
+        if not learn_speed(calibration, speed, direction, watts):
+            _LOGGER.info("%s: live calibration of speed %s (%s) refused: %.2f W (table %s W)",
+                         self.entity_id, speed, direction, watts, old)
+            return
+        _LOGGER.info("%s: live calibration, speed %s (%s): %s -> %.2f W",
+                     self.entity_id, speed, direction, old, watts)
+        # An editor holding the old table must not overwrite it.
+        self.device["rev"] = self.device.get("rev", 0) + 1
+        self.hass.async_create_task(self.hub.store.async_save())
 
     @callback
     def _colour_from_jump(self, mode: int) -> None:
@@ -250,8 +280,11 @@ class RFFan(RFEntity, FanEntity):
 
     async def _async_speed(self, speed: int) -> None:
         """Speed buttons also start the fan."""
+        previous = self._last_speed if self.is_on else 0
         await self._async_need_power()
         await self.async_send_role(f"{SPEED_PREFIX}{speed}")
+        if self._aligner is not None and not self.hub.calibrating:
+            self._aligner.command_sent(speed, previous)
         self._own_speed = True
         self._last_speed = speed
         self._attr_percentage = self._pct(speed)
@@ -263,6 +296,8 @@ class RFFan(RFEntity, FanEntity):
             self._set_off()
             return
         await self.async_send_role(ROLE_POWER if self._power_toggle else ROLE_OFF)
+        if self._aligner is not None:
+            self._aligner.command_sent(0, self._last_speed)
         self._set_off()
 
     async def async_set_percentage(self, percentage: int) -> None:

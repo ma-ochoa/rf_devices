@@ -73,6 +73,19 @@
           "fan_light": "Fan and light",
           "unknown": "Unknown"
         }
+      },
+      "speed_estimate": {
+        "name": "Estimated speed",
+        "state_attributes": {
+          "trend": {
+            "name": "Trend",
+            "state": {
+              "accelerating": "Accelerating",
+              "decelerating": "Decelerating",
+              "stable": "Stable"
+            }
+          }
+        }
       }
     },
     "binary_sensor": {

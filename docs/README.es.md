@@ -147,6 +147,12 @@ mantenerlo correcto:
   los motores PWM consumen distinto. Después, el alineador lee el medidor y corrige velocidad,
   luz y color sin transmitir, incluso tras usar el mando original. Los valores se pueden editar a
   mano.
+  - **Calibración en vivo** (medidores en directo, activada por defecto): tras cada orden de
+    velocidad de RF Devices, con la luz apagada, se vigila el consumo hasta 15 min y, cuando está
+    realmente estable (un motor PWM puede seguir subiendo durante minutos), se corrige el valor de
+    esa velocidad. Si la lectura parece de otra velocidad (se usó el mando entretanto), se ignora.
+  - Sensor **Velocidad estimada**: posición del motor entre las velocidades calibradas, en %, con
+    el atributo `trend` (acelerando / frenando / estable) mientras cambia.
 - **Botones de sincronizar** y los servicios `rf_devices.set_state`,
   `rf_devices.set_position_state` y `rf_devices.set_color_mode` corrigen el estado sin enviar
   nada.

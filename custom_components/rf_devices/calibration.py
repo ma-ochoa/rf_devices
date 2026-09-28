@@ -64,6 +64,19 @@ PUSHED_BAND_PCT = 0.10
 JUMP_MIN = 0.3  # W: a smaller change between settled readings has no direction
 SPEED_DEADBAND_LIVE = 0.1
 SPEED_DEADBAND_PUSHED = 0.4
+TOP_OVERSHOOT_W, TOP_OVERSHOOT_PCT = 6.0, 0.40  # above the top speed's value: still the top speed
+# Live calibration: after an own speed command, with the lamp off, the motor is
+# watched until it has really settled (the top speed of the terrace fan kept
+# creeping up for ~6 min) and that speed's value is corrected.
+LEARN_MIN = 180.0  # s after the command before anything is learned
+LEARN_MAX = 900.0  # s: stop watching after this
+LEARN_HOLD = 120.0  # s the reading must stay flat
+LEARN_SPREAD_W, LEARN_SPREAD_PCT = 0.3, 0.015  # allowed spread within LEARN_HOLD
+LEARN_MAX_SLOPE = 0.1 / 60  # W/s (0.1 W per minute)
+LEARN_STEP_W = 0.2  # learn again when the settled value moves this much
+LEARN_MAX_CHANGE_W, LEARN_MAX_CHANGE_PCT = 1.0, 0.35  # larger corrections are refused
+TREND_WINDOW = 60.0  # s of readings for the speed-estimate trend
+TREND_SLOPE = 0.3 / 60  # W/s: faster than this = accelerating / decelerating
 
 
 def read_watts(hass: HomeAssistant, entity_id: str) -> float | None:
@@ -188,7 +201,11 @@ def _classify(
 ) -> Estimate | None:
     ranked = sorted(candidates(calibration, only_mode), key=lambda c: abs(c.watts - watts))
     best = ranked[0]
-    if abs(best.watts - watts) > max(3.0, best.watts * 0.10):
+    top = len(calibration["speeds"])
+    overshoot = best.speed == top and watts > best.watts and watts - best.watts <= max(
+        TOP_OVERSHOOT_W, (calibration["speeds"][-1][0] - calibration["idle"]) * TOP_OVERSHOOT_PCT
+    )
+    if abs(best.watts - watts) > max(3.0, best.watts * 0.10) and not overshoot:
         return None
     # Live-read tables resolve 0.1 W; pushed-only ones about 1 W.
     margin = LIVE_MARGIN_W if calibration.get("direct") else MIN_MARGIN_W
@@ -271,6 +288,13 @@ def speed_from_reading(
     """
     ranges = speed_ranges(calibration, offset)
     fits = [n for n, (low, high) in enumerate(ranges, start=1) if low <= watts <= high]
+    if not fits and ranges:
+        # Beyond the table: a motor that settled higher than calibrated is still
+        # the top speed, one below the slowest is still the slowest.
+        if watts > ranges[-1][1]:
+            fits = [len(ranges)]
+        elif watts < ranges[0][0]:
+            fits = [1]
     if trust_current and current and current in fits:
         return current
     values = speed_values(calibration)
@@ -289,6 +313,72 @@ def speed_from_reading(
     if current and current in fits:
         return current
     return None
+
+
+def learn_speed(
+    calibration: dict, speed: int, direction: str, watts: float, when: str | None = None
+) -> bool:
+    """Correct one speed's value from a settled live reading (motor only, lamp off).
+
+    Refused when the value would break the order of the table, when it is
+    closer to another speed than to this one (someone used the remote
+    meanwhile), or when the change is implausibly large. Returns whether the
+    table changed.
+    """
+    speeds = calibration["speeds"]
+    count = len(speeds)
+    if not 1 <= speed <= count or direction not in ("up", "down"):
+        return False
+    values = speed_values(calibration)
+    col = 0 if direction == "up" else 1
+    old = values[speed - 1][col]
+    if abs(watts - old) > max(LEARN_MAX_CHANGE_W, abs(old) * LEARN_MAX_CHANGE_PCT):
+        return False
+    same = [v[col] for v in values]
+    if (speed > 1 and watts <= same[speed - 2]) or (speed < count and watts >= same[speed]):
+        return False
+    own = min(abs(watts - x) for x in values[speed - 1])
+    others = [x for i, v in enumerate(values) if i != speed - 1 for x in v]
+    if others and min(abs(watts - x) for x in others) < own:
+        return False
+    watts = round(watts, 2)
+    downs = list(calibration.get("speeds_down") or [])
+    downs += [None] * (count - len(downs))
+    old_up = values[speed - 1][0]
+    if direction == "up":
+        speeds[speed - 1][0] = watts
+        speeds[speed - 1][1] = round(watts + calibration["light"] - calibration["idle"], 2)
+        # A "down" value never measured on its own (e.g. the top speed) follows.
+        if downs[speed - 1] is None or abs(float(downs[speed - 1]) - old_up) < 0.005:
+            downs[speed - 1] = watts
+    else:
+        downs[speed - 1] = watts
+    calibration["speeds_down"] = downs
+    calibration.setdefault("learned", {})[f"{speed}_{direction}"] = (
+        when or dt_util.utcnow().isoformat()
+    )
+    return True
+
+
+def speed_position(calibration: dict, motor: float, direction: str | None = None) -> float:
+    """Fractional speed (0 = stopped … N = top) for a motor-only draw.
+
+    Interpolated between the calibrated speeds, not in a straight line from
+    the slowest to the fastest: a fan's draw grows much faster than its
+    speed. Going up the "up" values are used, going down the "down" ones,
+    otherwise their average. Clamped to 0…N.
+    """
+    values = speed_values(calibration)
+    pick = {"up": lambda v: v[0], "down": lambda v: v[1]}.get(direction, lambda v: (v[0] + v[1]) / 2)
+    points = [(0.0, float(calibration["idle"]))]
+    for index, v in enumerate(values, start=1):
+        points.append((float(index), max(pick(v), points[-1][1] + 0.01)))
+    if motor <= points[0][1]:
+        return 0.0
+    for (s0, w0), (s1, w1) in zip(points, points[1:], strict=False):
+        if motor <= w1:
+            return s0 + (motor - w0) / (w1 - w0) * (s1 - s0)
+    return float(len(values))
 
 
 def _lamp_offset(calibration: dict, mode: int | None) -> float:
@@ -434,6 +524,11 @@ class PowerAligner:
     2. Once the motor has settled: the speed as well, when the table can tell
        it apart. Live meters are sampled until flat; pushed-only meters count
        as settled after ``SLOW_SETTLE`` s without a new report.
+
+    With a live meter it also learns: after an own speed command (see
+    ``command_sent``) with the lamp off, the reading is watched for up to
+    ``LEARN_MAX`` s and, once really flat, that speed's value is corrected
+    through ``learn`` (see ``learn_speed``).
     """
 
     def __init__(
@@ -445,6 +540,8 @@ class PowerAligner:
         light_mode: Callable[[], int | None] = lambda: None,
         colour_changed: Callable[[int], None] = lambda mode: None,
         speed_state: Callable[[], tuple[int | None, bool]] = lambda: (None, False),
+        lamp_on: Callable[[], bool | None] = lambda: None,
+        learn: Callable[[int, str, float], None] | None = None,
     ) -> None:
         self.hass = hass
         self.meter = meter
@@ -462,6 +559,53 @@ class PowerAligner:
         self._flat: float | None = None  # current settled level
         self._pending_colour: tuple[int, float, int] | None = None  # (mode, level, confirmations)
         self._flat_before: float | None = None  # settled level before a sudden jump
+        self._lamp_on = lamp_on
+        self._learn = learn
+        self._session: dict | None = None  # live calibration after an own command
+
+    @callback
+    def command_sent(self, speed: int, previous: int) -> None:
+        """An own speed command (0 = off): start watching to learn its real draw."""
+        self._session = None
+        if not self.meter.direct or self._learn is None or not speed or speed == previous:
+            return
+        self._session = {
+            "speed": speed,
+            "direction": "up" if speed > previous else "down",
+            "start": self.hass.loop.time(),
+            "window": [],
+            "learned": None,
+        }
+        _LOGGER.debug("%s: watching speed %s (%s) to learn its draw",
+                      self.meter.entity_id, speed, self._session["direction"])
+
+    def _learn_tick(self, now: float, watts: float) -> None:
+        session = self._session
+        if session is None:
+            return
+        # Anything else happening (lamp on, speed corrected, fan off) ends it.
+        if (
+            self._speed_state() != (session["speed"], True)
+            or self._lamp_on() is not False
+            or now - session["start"] > LEARN_MAX
+        ):
+            self._session = None
+            return
+        window = session["window"]
+        window.append((now, watts))
+        window[:] = [(t, v) for t, v in window if t >= now - LEARN_HOLD]
+        if now - session["start"] < LEARN_MIN or window[0][0] > now - LEARN_HOLD + MONITOR_EVERY:
+            return
+        values = [v for _, v in window]
+        median = statistics.median(values)
+        if max(values) - min(values) > max(LEARN_SPREAD_W, abs(median) * LEARN_SPREAD_PCT):
+            return
+        if abs(_slope(window)) > LEARN_MAX_SLOPE:
+            return
+        if session["learned"] is not None and abs(median - session["learned"]) < LEARN_STEP_W:
+            return
+        session["learned"] = median
+        self._learn(session["speed"], session["direction"], round(median, 2))
 
     @callback
     def async_start(self) -> Callable[[], None]:
@@ -526,6 +670,7 @@ class PowerAligner:
             if watts is not None and self._abrupt_colour(watts):
                 window = []  # a new level: stability starts again
             if watts is not None:
+                self._learn_tick(now, watts)
                 window.append((now, watts))
                 window = [(t, v) for t, v in window if t >= now - ALIGN_HOLD]
                 values = [v for _, v in window]

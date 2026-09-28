@@ -232,6 +232,8 @@ const I18N = {
     cal_save: "Guardar calibración",
     cal_remove: "Borrar calibración",
     cal_table: "Calibración ({date})",
+    cal_live: "Calibración en vivo: tras cada orden de velocidad, con la luz apagada, esperar a que el motor se estabilice de verdad (hasta 15 min) y corregir el valor de esa velocidad",
+    cal_learned: "Corregido en vivo: {list}",
     cal_warn_close: "Hay velocidades con consumos muy parecidos ({list}): entre ellas solo se corregirá encendido/apagado.",
     live_relay: "Relé",
     live_switch: "Pulsador",
@@ -532,6 +534,8 @@ const I18N = {
     cal_save: "Save calibration",
     cal_remove: "Remove calibration",
     cal_table: "Calibration ({date})",
+    cal_live: "Live calibration: after each speed command, with the light off, wait until the motor has really settled (up to 15 min) and correct that speed's value",
+    cal_learned: "Corrected live: {list}",
     cal_warn_close: "Some speeds draw almost the same ({list}): between them only on/off is corrected.",
     live_relay: "Relay",
     live_switch: "Wall switch",
@@ -1230,7 +1234,9 @@ class RFDevicesPanel extends HTMLElement {
     const o = this._state.draft.options;
     const c = o.calibration;
     return `<div class="full calblock">
-      ${c ? `<b>${this.t("cal_table", { date: (c.measured || "").slice(0, 10) })}</b>${this.calibrationTable(c, true)}` : ""}
+      ${c ? `<b>${this.t("cal_table", { date: (c.measured || "").slice(0, 10) })}</b>${this.calibrationTable(c, true)}
+      <label class="check full"><input type="checkbox" data-opt="live_calibration" ${(o.live_calibration ?? true) ? "checked" : ""}> ${this.t("cal_live")}</label>
+      ${c.learned && Object.keys(c.learned).length ? `<small>${this.t("cal_learned", { list: Object.entries(c.learned).map(([k, v]) => `${k.replace("_up", " ↑").replace("_down", " ↓")} (${v.slice(5, 16).replace("T", " ")})`).join(", ") })}</small>` : ""}` : ""}
       <div class="actions">
         <button data-action="calibrate">⚖ ${this.t("calibrate")}</button>
         ${c ? `<button data-action="cal-remove">${this.t("cal_remove")}</button>` : ""}

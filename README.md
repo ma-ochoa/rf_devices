@@ -145,6 +145,12 @@ it right:
   each colour mode, and every speed going **up** and **down** (PWM motors draw differently).
   Afterwards the aligner reads the meter and corrects fan speed, lamp and colour without
   transmitting, even after the original remote was used. Values can be edited by hand.
+  - **Live calibration** (live meters, on by default): after each speed command sent by
+    RF Devices, with the light off, the draw is watched for up to 15 min; once it is really flat
+    (a PWM motor can keep creeping for minutes), that speed's value is corrected. Readings that
+    look like another speed (the remote was used meanwhile) are ignored.
+  - **Estimated speed** sensor: the motor's position between the calibrated speeds, in %, with a
+    `trend` attribute (accelerating / decelerating / stable) while it ramps.
 - **Sync buttons** and the services `rf_devices.set_state`, `rf_devices.set_position_state` and
   `rf_devices.set_color_mode` correct the state without sending anything.
 

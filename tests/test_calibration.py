@@ -390,3 +390,93 @@ async def test_colour_press_with_the_fan_running_is_not_a_speed_change(hass: Hom
     stop()
     assert colours and colours[-1] == 0  # Neutro
     assert {e.speed for e in decided if e.speed is not None} == {3}  # speed never touched
+
+
+def test_above_the_top_speed_is_still_the_top_speed() -> None:
+    # 28/09: speed 6 kept creeping up for ~6 min, to 22.8 W (table: 18.66).
+    assert cal.speed_from_reading(REAL, 22.8, 0.0, "up", 4, False) == 6
+    e = cal.classify(REAL, 22.8, current=4)
+    assert (e.fan_on, e.light, e.speed) == (True, False, 6)
+    e = cal.classify(REAL, 22.8 + 36.0, light_mode=0, current=4)
+    assert (e.fan_on, e.light, e.speed) == (True, True, 6)
+    assert cal.classify(REAL, 30.0) is None  # far above: not a fan state
+
+
+def test_learn_speed() -> None:
+    import copy
+
+    table = copy.deepcopy(REAL)
+    assert cal.learn_speed(table, 6, "up", 23.5, "t")
+    assert table["speeds"][5] == [23.5, 59.5]
+    assert table["speeds_down"][5] == 23.5  # never measured on its own: follows
+    assert table["learned"] == {"6_up": "t"}
+    assert cal.learn_speed(table, 5, "down", 15.3)
+    assert table["speeds_down"][4] == 15.3 and table["speeds"][4][0] == 13.73
+    # Refused: nearer to speed 5 (the remote changed it), order broken, too big.
+    assert not cal.learn_speed(table, 6, "up", 14.2)
+    assert not cal.learn_speed(table, 3, "up", 10.0)
+    assert not cal.learn_speed(table, 1, "up", 0.5)
+    assert not cal.learn_speed(table, 7, "up", 30.0)
+
+
+@pytest.mark.parametrize(
+    ("motor", "direction", "expected"),
+    [(0.0, None, 0.0), (3.59, "up", 1.0), (9.82, "up", 4.0), (16.195, "up", 5.5),
+     (12.21, "down", 4.0), (30.0, None, 6.0), (1.795, "up", 0.5)],
+)
+def test_speed_position(motor, direction, expected) -> None:
+    assert cal.speed_position(REAL, motor, direction) == pytest.approx(expected, abs=0.01)
+
+
+def _live_aligner(hass, monkeypatch, readings, lamp, learned, state):
+    monkeypatch.setattr(cal, "MONITOR_EVERY", 0.01)
+    monkeypatch.setattr(cal, "ALIGN_HOLD", 0.1)
+    monkeypatch.setattr(cal, "LEARN_MIN", 0.2)
+    monkeypatch.setattr(cal, "LEARN_HOLD", 0.15)
+    monkeypatch.setattr(cal, "LEARN_MAX", 5.0)
+    it = iter(readings)
+
+    class LiveMeter:
+        direct = True
+        entity_id = "sensor.fan_power"
+
+        async def async_read(self):
+            return next(it, readings[-1])
+
+    import copy
+
+    return cal.PowerAligner(
+        hass, LiveMeter(), copy.deepcopy(REAL), lambda e: None,
+        speed_state=lambda: (state["speed"], state["own"]),
+        lamp_on=lambda: lamp["on"],
+        learn=lambda s, d, w: learned.append((s, d, w)),
+    )
+
+
+async def test_live_calibration_learns_the_settled_top_speed(hass: HomeAssistant, monkeypatch) -> None:
+    ramp = [9.8 + i * 0.5 for i in range(27)] + [23.4] * 60
+    learned: list = []
+    state = {"speed": 6, "own": True}
+    aligner = _live_aligner(hass, monkeypatch, ramp, {"on": False}, learned, state)
+    stop = aligner.async_start()
+    aligner.command_sent(6, 4)
+    await asyncio.sleep(1.2)
+    stop()
+    assert learned and learned[-1] == (6, "up", 23.4)
+
+
+async def test_live_calibration_needs_the_lamp_off_and_own_speed(hass: HomeAssistant, monkeypatch) -> None:
+    learned: list = []
+    lamp = {"on": True}
+    state = {"speed": 6, "own": True}
+    aligner = _live_aligner(hass, monkeypatch, [23.4] * 100, lamp, learned, state)
+    stop = aligner.async_start()
+    aligner.command_sent(6, 4)
+    await asyncio.sleep(0.6)
+    assert not learned  # lamp on: the session ended
+    lamp["on"] = False
+    state["own"] = False  # the speed now comes from a reading
+    aligner.command_sent(6, 4)
+    await asyncio.sleep(0.6)
+    stop()
+    assert not learned

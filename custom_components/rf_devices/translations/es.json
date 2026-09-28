@@ -73,6 +73,19 @@
           "fan_light": "Ventilador y luz",
           "unknown": "Desconocido"
         }
+      },
+      "speed_estimate": {
+        "name": "Velocidad estimada",
+        "state_attributes": {
+          "trend": {
+            "name": "Tendencia",
+            "state": {
+              "accelerating": "Acelerando",
+              "decelerating": "Frenando",
+              "stable": "Estable"
+            }
+          }
+        }
       }
     },
     "binary_sensor": {

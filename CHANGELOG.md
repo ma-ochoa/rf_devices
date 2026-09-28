@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.0
+
+- Live calibration: after an own speed command, with the light off, the settled draw (up to
+  15 min later) corrects that speed's up/down value. Implausible readings are refused.
+- New "Estimated speed" sensor (%): the motor's position between the calibrated speeds, with a
+  `trend` attribute, so a PWM motor can be followed while it speeds up or slows down.
+- A settled reading above the top speed's value is the top speed (it was left unrecognised).
+
 ## 0.10.1
 
 - Panel: fan and light button chips grouped on their own lines in the device list.

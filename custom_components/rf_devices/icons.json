@@ -9,5 +9,12 @@
     "set_color_mode": {
       "service": "mdi:palette"
     }
+  },
+  "entity": {
+    "sensor": {
+      "speed_estimate": {
+        "default": "mdi:fan-auto"
+      }
+    }
   }
 }
