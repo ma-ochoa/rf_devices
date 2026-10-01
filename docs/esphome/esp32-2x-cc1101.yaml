@@ -1,0 +1,117 @@
+# RF Devices · ESP32 with two CC1101 radios (recommended for Somfy RTS + 433.92 MHz remotes)
+#
+# One radio stays at 433.42 MHz (Somfy RTS), the other at 433.92 MHz (most
+# fixed-code remotes, alarms, doorbells). Each radio sends AND listens, so
+# RF Devices can learn codes, send them, generate Somfy frames and follow the
+# original remotes. The ESP only moves raw pulses: codes, Somfy rolling codes
+# and everything else live in Home Assistant (RF Devices).
+#
+# Needs ESPHome 2026.9 or newer (native cc1101 component, radio_frequency with
+# the ir_rf_proxy platform) and Home Assistant 2026.5 or newer.
+#
+# Wiring (per module, both on the same SPI bus):
+#   CC1101 VCC -> 3V3 (never 5 V)   GND -> GND
+#   SCK / MOSI / MISO -> the shared SPI pins below
+#   CSN  -> its own chip-select pin
+#   GDO0 -> its own pin, used to SEND
+#   GDO2 -> its own pin, used to RECEIVE
+# Use modules with 2.54 mm pins and a 433 MHz antenna on each.
+# The pins below are for a classic ESP32 DevKit; change them to your board's
+# (ESP32-S3: pick any free GPIO, avoid the strapping and flash/PSRAM pins).
+
+substitutions:
+  name: rf-gateway
+  friendly_name: RF Gateway
+  spi_clk: GPIO18
+  spi_mosi: GPIO23
+  spi_miso: GPIO19
+  # Radio A: 433.92 MHz
+  a_cs: GPIO21
+  a_gdo0: GPIO4
+  a_gdo2: GPIO16
+  # Radio B: 433.42 MHz (Somfy RTS)
+  b_cs: GPIO27
+  b_gdo0: GPIO32
+  b_gdo2: GPIO33
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+spi:
+  clk_pin: ${spi_clk}
+  mosi_pin: ${spi_mosi}
+  miso_pin: ${spi_miso}
+
+cc1101:
+  - id: radio_a
+    cs_pin: ${a_cs}
+    frequency: 433.92MHz
+  - id: radio_b
+    cs_pin: ${b_cs}
+    frequency: 433.42MHz
+
+remote_transmitter:
+  - id: tx_a
+    pin: ${a_gdo0}
+    carrier_duty_percent: 100%
+    non_blocking: true
+    on_transmit:
+      - cc1101.begin_tx: radio_a
+    on_complete:
+      - cc1101.begin_rx: radio_a
+  - id: tx_b
+    pin: ${b_gdo0}
+    carrier_duty_percent: 100%
+    non_blocking: true
+    on_transmit:
+      - cc1101.begin_tx: radio_b
+    on_complete:
+      - cc1101.begin_rx: radio_b
+
+remote_receiver:
+  - id: rx_a
+    pin: ${a_gdo2}
+    # Pulses shorter than this are noise; a burst ends after this much silence.
+    filter: 100us
+    idle: 10ms
+  - id: rx_b
+    pin: ${b_gdo2}
+    filter: 100us
+    idle: 10ms
+
+# What Home Assistant and RF Devices see. The transmitters become entities
+# (radio_frequency.*); the receivers are found by RF Devices on the same device.
+radio_frequency:
+  - platform: ir_rf_proxy
+    name: "RF 433.92 MHz"
+    remote_transmitter_id: tx_a
+    frequency: 433.92MHz
+  - platform: ir_rf_proxy
+    name: "RF 433.92 MHz receiver"
+    remote_receiver_id: rx_a
+    frequency: 433.92MHz
+  - platform: ir_rf_proxy
+    name: "RF 433.42 MHz"
+    remote_transmitter_id: tx_b
+    frequency: 433.42MHz
+  - platform: ir_rf_proxy
+    name: "RF 433.42 MHz receiver"
+    remote_receiver_id: rx_b
+    frequency: 433.42MHz

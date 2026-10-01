@@ -47,7 +47,9 @@ WATCHED_LOGGERS = (
     "aioesphomeapi",
     "broadlink",
 )
-RELATED_COMPONENTS = ("broadlink", "esphome", "radio_frequency", "infrared", "shelly")
+RELATED_COMPONENTS = (
+    "broadlink", "esphome", "radio_frequency", "infrared", "shelly", "espsomfy_rts", "ble_adv",
+)
 RF_INFO_TYPES = ("RadioFrequencyInfo", "InfraredInfo")
 
 
@@ -162,6 +164,8 @@ def info_dict(info: Any) -> dict[str, Any]:
 
 def _esphome(hass: HomeAssistant) -> list[dict[str, Any]]:
     """ESPHome devices, in detail for those offering RF or IR."""
+    from .transmitters.radio_frequency import listed_receivers
+
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
     out = []
@@ -193,6 +197,10 @@ def _esphome(hass: HomeAssistant) -> list[dict[str, Any]]:
             item.update(
                 available=getattr(data, "available", None),
                 rf_ir_infos=[info_dict(i) for i in rf],
+                # What the device itself lists (HA keeps no RF receivers); None = not asked.
+                listed_rf_receivers=None
+                if (listed := listed_receivers(hass, entry.entry_id)) is None
+                else [info_dict(i) for i in listed.values()],
                 entity_info_types=sorted({type(i).__name__ for i in infos}),
                 entities=[
                     {"entity_id": e.entity_id, "disabled_by": e.disabled_by,
@@ -222,7 +230,13 @@ def _involved_entities(hass: HomeAssistant, hub: RFHub) -> list[dict[str, Any]]:
 
 async def async_build_report(hass: HomeAssistant, hub: RFHub) -> dict[str, Any]:
     from .diagnostics import config_summary
+    from .transmitters.radio_frequency import async_refresh_receivers
 
+    ent_reg = er.async_get(hass)
+    for entry in hass.config_entries.async_entries("esphome"):
+        entities = er.async_entries_for_config_entry(ent_reg, entry.entry_id)
+        if any(e.domain == "radio_frequency" for e in entities):
+            await async_refresh_receivers(hass, entry.entry_id)
     log = hass.data.get(DATA_LOG)
     return {
         "generated": _now(),

@@ -17,6 +17,7 @@ from . import codec
 from .const import VERSION
 from .debug import async_build_report
 from .hub import RFHub
+from .models import KIND_ACTION, KIND_SOMFY, command_kind
 
 
 def _command_summary(cmd: dict) -> dict[str, Any]:
@@ -25,6 +26,12 @@ def _command_summary(cmd: dict) -> dict[str, Any]:
         "hold": cmd.get("hold"),
         "label": cmd.get("label"),
     }
+    kind = command_kind(cmd)
+    if kind == KIND_SOMFY:
+        return {**summary, "kind": "somfy", "button": cmd["button"]}
+    if kind == KIND_ACTION:
+        return {**summary, "kind": "action", "service": cmd["service"],
+                "entity_id": cmd.get("entity_id"), "data": cmd.get("data")}
     try:
         analysis = codec.analyze(cmd["code"])
     except codec.CodecError as err:
@@ -55,6 +62,14 @@ def config_summary(hub: RFHub) -> dict[str, Any]:
                 "rev": device.get("rev", 0),
                 "transmitter": device.get("transmitter"),
                 "options": device["options"],
+                "somfy": device.get("somfy"),
+                "somfy_code": hub.store.somfy_code(int(device["somfy"]["address"]))
+                if device.get("somfy") else None,
+                "linked_entity": device.get("linked_entity"),
+                "linked_light_entity": device.get("linked_light_entity"),
+                "mirror": device.get("mirror"),
+                "follow": device.get("follow"),
+                "follow_somfy": [f"{a:06X}" for a in device.get("follow_somfy") or []],
                 "commands": {
                     role: _command_summary(cmd) for role, cmd in device.get("commands", {}).items()
                 },
@@ -77,6 +92,7 @@ def config_summary(hub: RFHub) -> dict[str, Any]:
         "frequencies": hub.store.frequencies,
         "hidden_entities": hub.store.hidden,
         "calibrating": hub.calibrating,
+        "following": sorted(hub.follower.entry_ids()) if hub.follower else [],
         "devices": devices,
     }
 

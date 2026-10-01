@@ -116,8 +116,12 @@ class FakeTransmitter(RadioFrequencyTransmitterEntity):
 class FakeClient:
     """Just enough of aioesphomeapi's APIClient."""
 
-    def __init__(self) -> None:
+    def __init__(self, infos=()) -> None:
         self.callbacks = []
+        self.infos = list(infos)  # what the device lists: transmitters AND receivers
+
+    async def list_entities_services(self):
+        return list(self.infos), []
 
     def subscribe_infrared_rf_receive(self, callback):
         self.callbacks.append(callback)
@@ -143,16 +147,14 @@ async def rf(hass: HomeAssistant, hass_storage):
     """RF Devices on an ESPHome radio_frequency transmitter with an RF receiver."""
     esphome_entry = MockConfigEntry(domain="esphome")
     esphome_entry.add_to_hass(hass)
-    client = FakeClient()
+    tx_info = RadioFrequencyInfo(key=1, capabilities=1, frequency_min=433_920_000, frequency_max=433_920_000)
+    rx_info = RadioFrequencyInfo(key=2, capabilities=2, frequency_min=433_920_000, frequency_max=433_920_000)
+    client = FakeClient([tx_info, rx_info])
     esphome_entry.runtime_data = SimpleNamespace(
         client=client,
         available=True,
-        info={
-            RadioFrequencyInfo: {
-                1: RadioFrequencyInfo(key=1, capabilities=1, frequency_min=433_920_000, frequency_max=433_920_000),
-                2: RadioFrequencyInfo(key=2, capabilities=2, frequency_min=433_920_000, frequency_max=433_920_000),
-            }
-        },
+        # As Home Assistant does: it keeps the transmitters only (no entity for a receiver).
+        info={RadioFrequencyInfo: {1: tx_info}},
     )
     assert await async_setup_component(hass, "radio_frequency", {})
     # Added as the ESPHome integration would: platform "esphome", its config entry.
@@ -238,12 +240,18 @@ async def test_learn_timeout_unsubscribes(hass: HomeAssistant, rf, hass_ws_clien
 
 
 async def test_learn_refused_without_receiver(hass: HomeAssistant, rf, hass_ws_client) -> None:
-    rf.esphome.runtime_data.info[RadioFrequencyInfo].pop(2)
+    rf.client.infos.pop()  # the device lists a transmitter only
     ws = await hass_ws_client(hass)
     await ws.send_json_auto_id({"type": "rf_devices/learn"})
-    msg = await ws.receive_json()
-    assert not msg["success"]
-    assert "no RF receiver" in msg["error"]["message"]
+    assert (await ws.receive_json())["success"]  # not known until the device is asked
+    stages, ev = await _stages(ws)
+    assert stages == ["error"]
+    assert "no RF receiver" in ev["message"]
+    # Now it is known, the panel says so before starting.
+    await ws.send_json_auto_id({"type": "rf_devices/info"})
+    info = (await ws.receive_json())["result"]
+    tx = next(t for t in info["transmitters"] if t["entity_id"] == TX)
+    assert tx["can_learn"] is False and "no RF receiver" in tx["learn_problem"]
 
 
 async def test_learn_refused_when_disconnected(hass: HomeAssistant, rf, hass_ws_client) -> None:
@@ -282,7 +290,8 @@ async def test_debug_report(hass: HomeAssistant, rf, hass_ws_client, monkeypatch
     assert tx["learn_problem"] is None and tx["platform"] == "esphome"
     assert tx["frequency_ranges"] == [[433_920_000, 433_920_000]]
     esp = report["esphome"][0]
-    assert {i["key"] for i in esp["rf_ir_infos"]} == {1, 2}
+    assert {i["key"] for i in esp["rf_ir_infos"]} == {1}  # what Home Assistant keeps
+    assert {i["key"] for i in esp["listed_rf_receivers"]} == {2}  # what the device lists
     assert any(e["entity_id"] == TX for e in esp["entities"])
     assert any(e["entity_id"] == "light.luz_cama" for e in report["entities"])
     kinds = [e["kind"] for e in report["trace"]]
@@ -295,3 +304,60 @@ async def test_debug_report(hass: HomeAssistant, rf, hass_ws_client, monkeypatch
     assert captured["fingerprint"] == codec.fingerprint(capture(BITS_B))
     assert any(r["message"] == "something odd" for r in report["log"])
     assert "code" not in report["config"]["devices"][0]["commands"]["on"]
+
+
+async def test_broadlink_radio_frequency_entity_learns_like_its_remote(
+    hass: HomeAssistant, rf, hass_ws_client
+) -> None:
+    """Choosing a Broadlink's radio_frequency entity (not its remote) must still learn."""
+    from unittest.mock import MagicMock
+
+    api = MagicMock()
+    api.check_data.return_value = codec.encode(codec.decode(capture(BITS_A)))
+    broadlink_entry = MockConfigEntry(domain="broadlink")
+    broadlink_entry.add_to_hass(hass)
+    ent = er.async_get(hass).async_get_or_create(
+        "radio_frequency", "broadlink", "mac-rf", config_entry=broadlink_entry,
+        suggested_object_id="rm4_pro_rf",
+    )
+    hass.states.async_set(ent.entity_id, "unknown")
+
+    async def request(func, *args):
+        return func(*args)
+
+    hass.data["broadlink"] = SimpleNamespace(
+        devices={broadlink_entry.entry_id: SimpleNamespace(api=api, async_request=request)}
+    )
+
+    ws = await hass_ws_client(hass)
+    await ws.send_json_auto_id({"type": "rf_devices/info"})
+    info = (await ws.receive_json())["result"]
+    tx = next(t for t in info["transmitters"] if t["entity_id"] == ent.entity_id)
+    assert tx["can_learn"] is True and tx["sweeps"] is True
+
+    await ws.send_json_auto_id(
+        {"type": "rf_devices/learn", "transmitter": ent.entity_id, "frequency": 433.92}
+    )
+    assert (await ws.receive_json())["success"]
+    stages, ev = await _stages(ws)
+    assert stages == ["press", "captured"], ev
+    api.find_rf_packet.assert_called_once_with(433.92)
+    assert ev["fingerprint"] == codec.fingerprint(capture(BITS_A))
+
+
+async def test_receivers_come_from_the_device_not_from_home_assistant(hass: HomeAssistant, rf) -> None:
+    """Regression (0.12.0-iotorero.1): HA's ESPHome data never holds RF receivers."""
+    from custom_components.rf_devices.transmitters.radio_frequency import (
+        ReceiversUnknown,
+        async_refresh_receivers,
+        esphome_receivers,
+    )
+
+    hass.data.pop(rf_tx.DATA_RECEIVERS, None)
+    assert RadioFrequencyInfo in rf.esphome.runtime_data.info
+    assert all(i.capabilities == 1 for i in rf.esphome.runtime_data.info[RadioFrequencyInfo].values())
+    with pytest.raises(ReceiversUnknown):
+        esphome_receivers(hass, rf.esphome.entry_id)
+    await async_refresh_receivers(hass, rf.esphome.entry_id)
+    _, receivers = esphome_receivers(hass, rf.esphome.entry_id)
+    assert set(receivers) == {2}

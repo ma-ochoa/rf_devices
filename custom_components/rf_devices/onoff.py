@@ -163,6 +163,24 @@ class OnOffMixin(RFEntity):
         self.user_off_at = self.hass.loop.time()
         await self._async_set(False)
 
+    @callback
+    def mirror_state(self, state) -> None:
+        if state.state in (STATE_ON, STATE_OFF):
+            self._attr_is_on = state.state == STATE_ON
+
+    async def async_follow_remote(self, role: str) -> bool:
+        if role not in self._roles.values():
+            return False
+        if self._state_entity or self.mirror_source:
+            return True  # the real state comes from there
+        async with self._op_lock:
+            if role == self._roles["toggle"]:
+                self._attr_is_on = not self._attr_is_on
+            else:
+                self._attr_is_on = role == self._roles["on"]
+            self.async_write_ha_state()
+        return True
+
     async def async_set_assumed_state(self, is_on: bool) -> None:
         """Service handler: change the state without transmitting."""
         self._attr_is_on = is_on

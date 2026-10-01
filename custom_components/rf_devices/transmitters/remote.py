@@ -44,6 +44,16 @@ class RemoteTransmitter(Transmitter):
             blocking=True,
         )
 
+    def carrier_note(self, frequency_hz: int) -> str | None:
+        # A Broadlink sends at its own fixed carrier (433.92 or 315 MHz).
+        usual = 315_000_000 if codec.kind_for_frequency(frequency_hz) == codec.TYPE_RF315 else 433_920_000
+        if abs(usual - frequency_hz) > 50_000:
+            return (
+                f"This remote sends at {usual / 1_000_000:g} MHz, not {frequency_hz / 1_000_000:g} MHz: "
+                "it may only reach the receiver from close by"
+            )
+        return None
+
     def _device(self):
         """The core Broadlink integration's device object for this remote."""
         if self.platform != BROADLINK:

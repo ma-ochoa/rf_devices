@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.12.0-labs.1 (test build, `labs` branch)
+
+Everything in this build is untested on real hardware: it is meant for users who try it and send
+the panel's *Diagnostics* report.
+
+- New: **three kinds of button**. Besides a captured RF code, a button can be a **Somfy RTS**
+  button or a **Home Assistant action** (a service call on any entity, with optional data).
+- New: **Somfy RTS** (generated). Each device gets its own 24-bit address and rolling code, kept
+  in the store apart from the devices and saved before every press. *Pair (PROG)*, "motor turns
+  the other way" and repeats per press in the panel. Sent at 433.42 MHz through a
+  `radio_frequency` transmitter; the panel warns when a transmitter can only do 433.92 MHz. The
+  counters travel with exports and never go back on import.
+- New: **devices driven by other integrations** (ESPSomfy RTS, ble_adv, ESPHome…). Link the
+  device to that integration's entity, fill the buttons with its actions in one click and copy
+  its state (cover position and movement, fan speed, preset and direction, on/off, a fan's
+  separate lamp). A linked cover passes "go to a position" straight to it.
+- New: **follow the original remote**. With an ESPHome RF receiver, RF Devices listens all the
+  time and applies the presses of the original remote without sending: stored fixed codes by
+  fingerprint, and real Somfy remotes by address (*Detect a Somfy remote*). Own transmissions
+  and captures are ignored. Every recognised press fires `rf_devices_remote`. The subscription
+  survives reconnections of the ESPHome device.
+- New: **ESP32 + CC1101** reference configs for ESPHome 2026.9+ (`docs/esphome`): two radios
+  (433.42 + 433.92 MHz, each sending and listening) or one radio that retunes to send Somfy.
+- With several radios on one ESPHome device, learning uses the receiver whose frequency matches
+  the transmitter.
+- Fix: **learning with an ESPHome receiver never started** in 0.12.0-iotorero.1 ("This ESPHome
+  device has no RF receiver"). Home Assistant keeps no record of RF receivers, only of
+  transmitters; RF Devices now asks the device itself for its receivers.
+- Fix: a **Broadlink's `radio_frequency` entity** could not learn ("Only ESPHome devices can
+  learn…"). It now learns the same way as the Broadlink's `remote` entity.
+- The *Diagnostics* report shows the RF receivers each ESPHome device lists.
+- Fix: saving a cover failed ("not a valid option at take_relay_entity_id").
+- Transmitters can send raw timings at a given frequency (`async_send_timings`); a Broadlink
+  gets them as a packet.
+
+- Includes everything in 0.11.9 of the main branch: the fix for saving blinds and "buttons only"
+  devices, timing a blind's travel from the panel, and its relay, wall buttons and power meter.
+
 ## 0.12.0-iotorero.1 (test build)
 
 - New: **`radio_frequency` transmitters** (Home Assistant 2026.5+). Codes are sent as raw timings

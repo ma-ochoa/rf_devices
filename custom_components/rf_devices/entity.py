@@ -11,13 +11,15 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from . import codec
 from .const import ATTR_HOLD, DEFAULT_DIM_HOLD, DOMAIN, MANUFACTURER, ROLE_LIGHT_DOWN, ROLE_LIGHT_UP
 from .hub import RFHub
 from .models import device_model, entity_plan, light_device_id, on_light_device
+
+# Seconds after an entity is added before it first copies its linked entity.
+MIRROR_START = 0.5
 
 
 class RFEntity(RestoreEntity, Entity):
@@ -56,10 +58,55 @@ class RFEntity(RestoreEntity, Entity):
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         live_entities(self.hass)[self.entity_id] = self
+        if source := self.mirror_source:
+            self.async_on_remove(
+                async_track_state_change_event(self.hass, [source], self._mirror_event)
+            )
+            # After the subclasses restored their last state (they await it).
+            self.async_on_remove(async_call_later(self.hass, MIRROR_START, self._mirror_now))
         if self.power_entity:
             self.async_on_remove(
                 async_track_state_change_event(self.hass, [self.power_entity], self._power_event)
             )
+
+    # --- another integration drives the device ("linked entity") ------------
+    @property
+    def mirror_source(self) -> str | None:
+        """The other integration's entity whose state this one copies, if any.
+
+        It knows the real state (ESPSomfy RTS listens to the remotes, ble_adv
+        tracks its own commands…), so it wins over what RF Devices assumed.
+        """
+        if not self.device.get("mirror"):
+            return None
+        return mirror_entity_for(self.device, self._key)
+
+    @callback
+    def _mirror_event(self, event: Event[EventStateChangedData]) -> None:
+        self._mirror_from(event.data["new_state"])
+
+    @callback
+    def _mirror_now(self, _now=None) -> None:
+        if source := self.mirror_source:
+            self._mirror_from(self.hass.states.get(source))
+
+    @callback
+    def _mirror_from(self, state: State | None) -> None:
+        if state is not None and state.state not in ("unavailable", "unknown"):
+            self.mirror_state(state)
+            self.async_write_ha_state()
+
+    @callback
+    def mirror_state(self, state: State) -> None:
+        """Copy ``state`` of the linked entity (nothing is sent)."""
+
+    # --- the original remote was heard (listen.py) ---------------------------
+    async def async_follow_remote(self, role: str) -> bool:
+        """The original remote sent ``role``: update the state without sending.
+
+        Returns whether this entity handles that role.
+        """
+        return False
 
     @property
     def relay(self):
@@ -104,9 +151,8 @@ class RFEntity(RestoreEntity, Entity):
         live_entities(self.hass).pop(self.entity_id, None)
         await super().async_will_remove_from_hass()
 
-    def code(self, role: str) -> str | None:
-        cmd = self.device.get("commands", {}).get(role)
-        return cmd["code"] if cmd else None
+    def has_command(self, role: str) -> bool:
+        return role in self.device.get("commands", {})
 
     async def async_send_role(
         self, role: str, hold: float | None = None, interval: float | None = None
@@ -116,16 +162,14 @@ class RFEntity(RestoreEntity, Entity):
             raise HomeAssistantError(
                 f"{self.device['name']}: command '{role}' has not been learned"
             )
-        code = cmd["code"]
         if hold is None:
             hold = cmd.get(ATTR_HOLD) or (
                 DEFAULT_DIM_HOLD if role in (ROLE_LIGHT_UP, ROLE_LIGHT_DOWN) else 0
             )
-        if hold:
-            code = codec.hold(code, hold)
-        await self.hub.async_send(
-            code,
-            self.hub.transmitter_for(self.device),
+        await self.hub.async_send_command(
+            self.device,
+            cmd,
+            hold,
             interval if interval is not None else self.device.get("command_interval"),
         )
 
@@ -178,3 +222,12 @@ def feedback_on(state: State | None, threshold: float) -> bool | None:
 @callback
 def find_by_unique_id(hass: HomeAssistant, unique_id: str) -> RFEntity | None:
     return next((e for e in live_entities(hass).values() if e.unique_id == unique_id), None)
+
+
+def mirror_entity_for(device: dict, key: str) -> str | None:
+    """Linked entity copied by the entity ``key`` of ``device`` (see ``mirror_source``)."""
+    if key == "fan_light":
+        return device.get("linked_light_entity")
+    if key == device["type"] and key != "buttons":
+        return device.get("linked_entity")
+    return None

@@ -69,6 +69,8 @@ CHECK_EVERY = dt.timedelta(minutes=1)  # idle-off check
 
 def relay_mode(device: dict) -> str:
     opts = device.get("options", {})
+    if device.get("type") == "cover":
+        return MODE_NONE  # a cover handles its relay itself (cover.py)
     mode = opts.get("relay_mode")
     if mode is None:  # not chosen: a relay means mode A
         return MODE_COUPLED if opts.get("power_entity") else MODE_NONE

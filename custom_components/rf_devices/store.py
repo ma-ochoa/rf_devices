@@ -25,17 +25,42 @@ class RFStore:
         self.frequencies: dict[str, float] = {}
         # Other integrations' entities RF Devices hid (and must unhide later).
         self.hidden: list[str] = []
+        # Last rolling code sent by each Somfy virtual remote, by address ("%06X").
+        # Kept apart from the devices: an editor saving an older copy of a
+        # device must never take the counter back (the motor ignores old codes).
+        self.somfy_codes: dict[str, int] = {}
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
         self.devices = data.get("devices", {})
         self.frequencies = data.get("frequencies", {})
         self.hidden = data.get("hidden", [])
+        self.somfy_codes = data.get("somfy_codes", {})
 
     async def async_save(self) -> None:
         await self._store.async_save(
-            {"devices": self.devices, "frequencies": self.frequencies, "hidden": self.hidden}
+            {
+                "devices": self.devices,
+                "frequencies": self.frequencies,
+                "hidden": self.hidden,
+                "somfy_codes": self.somfy_codes,
+            }
         )
+
+    def somfy_code(self, address: int) -> int:
+        """Last rolling code sent with this address (0 = never used)."""
+        return int(self.somfy_codes.get(f"{address:06X}", 0))
+
+    async def async_next_somfy_code(self, address: int) -> int:
+        """The rolling code for the next press, saved BEFORE it is sent.
+
+        A press that fails after this only skips a code, which motors accept;
+        sending a code twice (after a crash or restart) would be ignored.
+        """
+        code = (self.somfy_code(address) + 1) & 0xFFFF
+        self.somfy_codes[f"{address:06X}"] = code
+        await self.async_save()
+        return code
 
     async def async_upsert(self, data: dict) -> dict:
         device = validate_device(data)
@@ -59,12 +84,15 @@ class RFStore:
             for d in self.devices.values()
             if device_ids is None or d["id"] in device_ids
         ]
+        addresses = {f"{d['somfy']['address']:06X}" for d in devices if d.get("somfy")}
         return {
             "format": EXPORT_FORMAT,
             "version": 1,
             "integration_version": VERSION,
             "exported": dt_util.utcnow().isoformat(),
             "devices": devices,
+            # The motors only accept codes above the last one they saw.
+            "somfy_codes": {a: c for a, c in self.somfy_codes.items() if a in addresses},
         }
 
     async def async_import(self, data: dict, replace: bool = False) -> dict:
@@ -89,6 +117,9 @@ class RFStore:
             else:
                 added += 1
             self.devices[device["id"]] = device
+        for address, code in (data.get("somfy_codes") or {}).items():
+            # Never go back: keep the highest code known for the address.
+            self.somfy_codes[address] = max(int(code), int(self.somfy_codes.get(address, 0)))
         await self.async_save()
         return {"added": added, "replaced": replaced}
 

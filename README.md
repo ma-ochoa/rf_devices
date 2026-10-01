@@ -24,7 +24,8 @@
 ## What it gives you
 
 You have a ceiling fan, a lamp or a blind with a **433/315 MHz RF remote**, and a **Broadlink**
-that can send RF, or an **ESPHome RF proxy** such as the Athom/IoTorero RF-IR remote. RF Devices lets you:
+that can send RF, or an **ESPHome RF proxy** such as the Athom/IoTorero RF-IR remote or an
+**ESP32 with a CC1101** radio. RF Devices lets you:
 
 - **Capture every button from a panel** in the sidebar: no YAML, no `remote.learn_command`, no
   searching for codes in `.storage`.
@@ -43,6 +44,13 @@ that can send RF, or an **ESPHome RF proxy** such as the Athom/IoTorero RF-IR re
   change the fan speed, three switch the fan off, and so on.
 - **Keep working when Home Assistant is down**: on Shelly, an optional fallback script takes
   over the wall switch if Home Assistant does not confirm a press.
+- **Drive Somfy RTS blinds** (test build): RF Devices acts as one more Somfy remote, with its own
+  rolling code, paired with the motor like any new remote.
+- **Group devices other integrations drive** (test build): a blind from ESPSomfy RTS, a fan
+  from ble_adv, an ESPHome button… Each button can call a Home Assistant action, and the state
+  is copied from that integration's entity.
+- **Follow the original remote** (test build): with an RF receiver (ESP32 + CC1101), RF Devices
+  hears the usual remote and updates the state without sending anything.
 
 <p align="center"><img src="https://raw.githubusercontent.com/ma-ochoa/rf_devices/main/docs/images/en/list.png" alt="Device list" width="820"></p>
 
@@ -51,7 +59,9 @@ that can send RF, or an **ESPHome RF proxy** such as the Athom/IoTorero RF-IR re
 | Role | Tested with | Should also work with |
 |---|---|---|
 | RF transmitter / learner | **Broadlink RM Pro+** (433 MHz) | Other RF-capable Broadlink models supported by the core integration (RM Pro, RM4 Pro…) |
-| RF transmitter / learner (test build) | Not yet tested on real hardware | **Athom / IoTorero RF433-IR remote** (ESP32, ESPHome, firmware 3.0.8+); any ESPHome `ir_rf_proxy` with an RF transmitter and receiver; any `radio_frequency` entity (send only) |
+| RF transmitter / learner (test build) | Not yet tested on real hardware | **Athom / IoTorero RF433-IR remote** (ESP32, ESPHome, firmware 3.0.8+); **ESP32 + one or two CC1101** with ESPHome 2026.9+ (reference configs in [`docs/esphome`](docs/esphome)); any ESPHome `ir_rf_proxy` with an RF transmitter and receiver; any `radio_frequency` entity (send only) |
+| Somfy RTS (test build) | Not yet tested on real hardware | A 433.42 MHz transmitter (CC1101). The frames follow Somfy_Remote_Lib, which works with real motors |
+| Other integrations (test build) | Not yet tested on real hardware | Any entity: ESPSomfy RTS covers, ble_adv fans and lights, ESPHome buttons, scripts, scenes… |
 | Relay, meter and wall switch | **Shelly Plus 2PM** (Gen2, local RPC) | Other Shelly Gen2+ relays; any relay/switch entity through the generic adapter |
 
 It has only been tested with the devices in the first column. The code is built to grow:
@@ -69,7 +79,9 @@ It has only been tested with the devices in the first column. The code is built 
     `remote` entity and uses its connection to learn;
   - an **ESPHome** device with the `ir_rf_proxy` RF platform, which gives Home Assistant a
     `radio_frequency` entity. RF Devices sends raw timings through it and, when the device also
-    has an `ir_rf_proxy` RF receiver, learns from it (see [ESPHome RF proxy](#esphome-rf-proxy-iotorero)).
+    has an `ir_rf_proxy` RF receiver, learns from it (see [ESPHome RF proxies](#esphome-rf-proxies-iotorero-esp32--cc1101)).
+  - none, if every button of the device calls another integration (see
+    [Devices driven by other integrations](#devices-driven-by-other-integrations)).
 - Optional: a smart relay (e.g. Shelly) feeding the device, with a power meter and a wall switch.
 
 ## Installation
@@ -115,7 +127,7 @@ After installing, **RF Devices** appears in the sidebar (administrators only).
 |---|---|---|
 | **Light** | `light` (on/off, colour-temperature modes, brightness) | A single toggle button, or separate on/off; optional colour and brighter/dimmer buttons |
 | **Switch** | `switch` | Toggle or on/off |
-| **Cover** | `cover` with estimated position | Open, close, stop; travel times for positioning |
+| **Cover** | `cover` with estimated position | Open, close, stop; travel times (timed from the panel) for positioning; optional relay, wall buttons and power meter |
 | **Fan** | `fan` + optional `light` | Power (toggle) or off button, 1–10 speeds, direction (one reversing button, or summer/winter), presets such as *Breeze*, timers, optional lamp with its own buttons |
 | **Buttons** | `button` per remote button | Any |
 
@@ -242,34 +254,100 @@ If it stops answering, a notification tells you. With a smart plug configured, R
 power-cycle it for you. All transmissions go through a queue with a configurable gap, per
 device if needed.
 
-## ESPHome RF proxy (IoTorero)
+## ESPHome RF proxies (IoTorero, ESP32 + CC1101)
 
 Test build: it has not been tried on real hardware yet. Feedback in the issues is welcome.
 
-1. Add the device with the ESPHome integration. On the Athom / IoTorero RF433-IR remote, update
-   it to firmware **3.0.8 or newer** from its *Firmware Update* entity: that firmware already
-   declares the `ir_rf_proxy` RF transmitter and receiver. For your own ESPHome config:
-   ```yaml
-   radio_frequency:
-     - platform: ir_rf_proxy
-       name: 433MHz RF Transmitter
-       frequency: 433.92MHz
-       remote_transmitter_id: rf_transmitter
-     - platform: ir_rf_proxy
-       name: 433MHz RF Receiver
-       frequency: 433.92MHz
-       remote_receiver_id: rf_receiver
-   ```
-2. Choose the `radio_frequency.…_433mhz_rf_transmitter` entity as the transmitter (in the RF
-   Devices options, or per device).
+The ESP only moves raw pulses. Codes, Somfy rolling codes, learning and state live in Home
+Assistant, so adding a device never needs a new firmware.
+
+1. Add the device with the ESPHome integration.
+   - **Athom / IoTorero RF433-IR remote**: update it to firmware **3.0.8 or newer** from its
+     *Firmware Update* entity; it already declares the `ir_rf_proxy` RF transmitter and receiver.
+   - **ESP32 + CC1101**: start from a reference config (validated with `esphome config`
+     2026.9.1, not yet flashed):
+     - [`docs/esphome/esp32-2x-cc1101.yaml`](docs/esphome/esp32-2x-cc1101.yaml): **two radios**,
+       one at 433.42 MHz (Somfy RTS) and one at 433.92 MHz, each sending and listening.
+       Recommended: it can follow Somfy remotes and fixed-code remotes at the same time.
+     - [`docs/esphome/esp32-cc1101.yaml`](docs/esphome/esp32-cc1101.yaml): **one radio** that
+       listens at 433.92 MHz and retunes to 433.42 MHz only to send Somfy frames.
+     Both use the native `cc1101` component with separate pins to send (GDO0) and receive (GDO2).
+     Use 2.54 mm pin modules, power them from 3.3 V, and change the pins to your board's.
+   - Your own config: each `ir_rf_proxy` entity has **either** a transmitter **or** a receiver,
+     and must declare its `frequency` (Home Assistant refuses frequencies a transmitter does not
+     declare):
+     ```yaml
+     radio_frequency:
+       - platform: ir_rf_proxy
+         name: 433MHz RF Transmitter
+         frequency: 433.92MHz
+         remote_transmitter_id: rf_transmitter
+       - platform: ir_rf_proxy
+         name: 433MHz RF Receiver
+         frequency: 433.92MHz
+         remote_receiver_id: rf_receiver
+     ```
+2. Choose a `radio_frequency.…` transmitter (in the RF Devices options, or per device). With
+   two radios, pick the 433.42 MHz one for Somfy devices and the 433.92 MHz one for the rest.
+   Learning uses the receiver of the same device whose frequency matches the transmitter.
 3. Capture: there is no frequency sweep. Press the button once, holding it for about a second.
    The receiver's bursts are joined, noise is dropped and the result is cleaned like a
    Broadlink capture.
 
 Codes are still stored in the Broadlink format, so they can be moved between a Broadlink and an
-ESPHome transmitter. Only fixed-code 433.92 MHz OOK remotes work with these receivers (no
-rolling codes). With debug logs on, every received burst is logged: attach them to an issue if a
-capture fails.
+ESPHome transmitter. Fixed-code OOK remotes are captured; rolling-code remotes cannot be
+replayed (Somfy RTS is generated instead, see below). With debug logs on, every received burst
+is logged: attach them to an issue if a capture fails.
+
+## Somfy RTS
+
+Test build. Somfy RTS remotes change their code on every press, so a capture cannot be replayed:
+the motor ignores a code it has already seen. RF Devices acts as **one more remote** instead:
+
+1. Create the device (usually a *Cover*) and, in *General → How it is controlled*, choose
+   **Generated Somfy RTS**. It gets its own random 24-bit address; the buttons are assigned
+   (open = Up, close = Down, stop = My) and can be changed on the *Buttons* tab.
+2. Choose a transmitter that works at **433.42 MHz** (a CC1101). A 433.92 MHz transmitter
+   (Broadlink, Athom) is used at its own frequency and may only reach the motor from close by:
+   the panel warns about it.
+3. **Pair**: on a remote the motor already knows, hold PROG until the blind jogs; within two
+   minutes press **Pair (PROG)** in the panel; the blind jogs again. Doing it again unpairs it.
+   Motors accept about 12 remotes: keep the original one.
+4. If the motor turns the other way, tick **The motor turns the other way**.
+
+The rolling code is kept in `.storage/rf_devices`, apart from the devices, and is saved before
+each press (a failed press skips a code, which motors accept). It travels with exports, and an
+import never moves it back. **Do not use the same address from two places** (two Home Assistant
+installations, or an old firmware): their counters would clash.
+
+## Devices driven by other integrations
+
+Test build. When another integration already drives the device (ESPSomfy RTS, ble_adv, an
+ESPHome button, a script…), RF Devices can still group it with its light, relay, wall switch
+and gestures:
+
+- In *General → How it is controlled*, choose **Another integration** and pick its entity.
+  **Fill the buttons with its actions** creates a *Home Assistant action* for each button
+  (for example `cover.open_cover`, or `fan.set_percentage` with the percentage of each speed).
+  A fan's lamp may be a separate entity (ble_adv): pick it as the *light entity*.
+- **Copy its state** (recommended): the RF Devices entity follows the other integration's
+  entity (ESPSomfy RTS listens to the remotes; ble_adv remembers what it sends). A linked cover
+  also passes "go to 40 %" straight to it.
+- Any single button can also be an action, whatever the device: *More… → Home Assistant
+  action…* on the *Buttons* tab (service, target entity and optional JSON data).
+
+## Following the original remote
+
+Test build. With an RF receiver on the transmitter's ESPHome device, tick **Follow the original
+remote** on a device. RF Devices then listens all the time and, without sending anything:
+
+- recognises the device's stored codes (fixed-code remotes) and applies that button;
+- for Somfy devices, recognises the **real** Somfy remotes added with *Detect a Somfy remote*
+  (press any button of the real remote; its address is read from the frame).
+
+What RF Devices sends itself is ignored, and so is everything heard while sending or learning.
+Every recognised press fires the `rf_devices_remote` event, so remotes with no entity of their
+own (an alarm fob, an extra button) can drive automations.
 
 ## Import, export and existing codes
 
@@ -289,6 +367,7 @@ capture fails.
 | Event | Data |
 |---|---|
 | `rf_devices_wall_gesture` | `device_id`, `name`, `flips`, `action` |
+| `rf_devices_remote` | `device_id`, `name`, `role`, `source` (`code` or `somfy:<address>`), `applied` |
 
 ## Troubleshooting
 
@@ -312,7 +391,7 @@ capture fails.
 
 ## Limitations
 
-- RF 315/433 MHz only for now (no IR).
+- RF 315/433 MHz only for now (no IR). Rolling codes: only Somfy RTS (generated).
 - State is assumed unless a meter or feedback entity is linked.
 - Password-protected Shelly devices are handled through their Home Assistant entities only (no
   live power, detach or script).
@@ -322,7 +401,12 @@ capture fails.
 
 Transmitters live in `custom_components/rf_devices/transmitters/`. Subclass `Transmitter`
 (`base.py`), implement `async_send` and, if it can learn, `learn_problem` and `async_learn`, and
-map its entity domain in `TRANSMITTERS` (`__init__.py`).
+map its entity domain in `TRANSMITTERS` (`__init__.py`). Optional: `async_send_timings` (raw
+microseconds at a given frequency, used by generated protocols such as Somfy RTS),
+`carrier_note` and `receiver_problem`.
+
+Generated protocols live in `protocols/` (`somfy.py`: build and decode frames, no Home Assistant
+dependency). A command is one of three kinds (`rf`, `somfy`, `action`), see `models.py`.
 
 ## Extending: other relays
 

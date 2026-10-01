@@ -20,12 +20,20 @@ from .const import (
     DEFAULT_MIN_INTERVAL,
     LEARN_COOLDOWN,
 )
+from .models import KIND_ACTION, KIND_SOMFY, command_kind
+from .protocols import somfy
 from .store import RFStore
 from .transmitters import LearnError, LearnEvent, Transmitter, get_transmitter
 
 _LOGGER = logging.getLogger(__name__)
 
 __all__ = ["LearnError", "LearnEvent", "RFHub", "capture_result"]
+
+# Seconds after one of our transmissions during which a receiver may still be
+# hearing it (repeats, receiver buffering): not a press of the original remote.
+ECHO_MARGIN = 1.5
+
+SOMFY_INVERTED = {"up": "down", "down": "up", "my_up": "my_down", "my_down": "my_up"}
 
 
 class RFHub:
@@ -41,6 +49,10 @@ class RFHub:
         self._last_learn = 0.0
         self.calibrating = False
         self.relays: dict = {}  # device id -> RelayController
+        # Until when a receiver may be hearing our own transmission (loop.monotonic):
+        # the follower (listen.py) ignores what arrives before this.
+        self.echo_until = 0.0
+        self.follower = None  # listen.Follower when some device follows its remote
 
     @property
     def default_transmitter(self) -> str:
@@ -63,25 +75,93 @@ class RFHub:
         previous one finished.
         """
         codec.decode(code)  # fail early on garbage
+        entity_id = transmitter or self.default_transmitter
+
+        async def send() -> None:
+            await self.transmitter(entity_id).async_send(code)
+
+        await self._async_transmit(entity_id, interval, send, fingerprint=_fingerprint(code))
+
+    async def async_send_command(
+        self,
+        device: dict,
+        cmd: dict,
+        hold: float = 0,
+        interval: float | None = None,
+    ) -> None:
+        """Send one stored command of ``device``, whatever its kind."""
+        kind = command_kind(cmd)
+        if kind == KIND_ACTION:
+            await self.async_call_action(cmd)
+        elif kind == KIND_SOMFY:
+            await self.async_send_somfy(device, cmd["button"], hold, interval)
+        else:
+            code = codec.hold(cmd["code"], hold) if hold else cmd["code"]
+            await self.async_send(code, self.transmitter_for(device), interval)
+
+    async def async_send_somfy(
+        self, device: dict, button: str, hold: float = 0, interval: float | None = None
+    ) -> None:
+        """Press a button of the device's Somfy virtual remote (new rolling code each time)."""
+        cfg = device.get("somfy")
+        if not cfg:
+            raise HomeAssistantError(f"{device.get('name')}: no Somfy remote configured")
+        if cfg.get("invert"):
+            button = SOMFY_INVERTED.get(button, button)
+        repeats = somfy.repeats_for(hold) if hold else int(cfg.get("repeats", somfy.DEFAULT_REPEATS))
+        address = int(cfg["address"])
+        entity_id = self.transmitter_for(device)
+        tx = self.transmitter(entity_id)
+
+        async def send() -> None:
+            # The counter moves forward (and is saved) inside the queue, so
+            # codes leave in order even when presses pile up.
+            code = await self.store.async_next_somfy_code(address)
+            timings = somfy.encode(address, button, code, repeats)
+            debug.trace(
+                self.hass, "somfy", transmitter=entity_id, address=f"{address:06X}",
+                button=button, rolling_code=code, repeats=repeats,
+            )
+            await tx.async_send_timings(timings, somfy.FREQUENCY_HZ)
+
+        await self._async_transmit(entity_id, interval, send, fingerprint=f"somfy:{address:06X}:{button}")
+
+    async def async_call_action(self, cmd: dict) -> None:
+        """A command that is a service call on another integration's entity."""
+        domain, service = cmd["service"].split(".", 1)
+        data = dict(cmd.get("data") or {})
+        if cmd.get("entity_id"):
+            data["entity_id"] = cmd["entity_id"]
+        error = None
+        try:
+            await self.hass.services.async_call(domain, service, data, blocking=True)
+        except Exception as err:
+            error = f"{type(err).__name__}: {err}"
+            raise
+        finally:
+            debug.trace(self.hass, "action", service=cmd["service"], data=data, error=error)
+
+    async def _async_transmit(self, entity_id: str, interval: float | None, send, fingerprint=None) -> None:
         if self.learning:
             raise HomeAssistantError("RF Devices is capturing a code; try again in a moment")
-        entity_id = transmitter or self.default_transmitter
         async with self._lock:
             pause = self.min_interval if interval is None else interval
             wait = self._last_send + pause - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
             started = time.monotonic()
+            self.echo_until = float("inf")
             error = None
             try:
-                await self.transmitter(entity_id).async_send(code)
+                await send()
             except Exception as err:
                 error = f"{type(err).__name__}: {err}"
                 raise
             finally:
                 self._last_send = time.monotonic()
+                self.echo_until = self._last_send + ECHO_MARGIN
                 debug.trace(
-                    self.hass, "send", transmitter=entity_id, fingerprint=_fingerprint(code),
+                    self.hass, "send", transmitter=entity_id, fingerprint=fingerprint,
                     took_ms=round((self._last_send - started) * 1000), error=error,
                 )
 

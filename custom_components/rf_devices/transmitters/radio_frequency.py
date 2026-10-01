@@ -29,6 +29,9 @@ _LOGGER = logging.getLogger(__name__)
 
 ESPHOME = "esphome"
 RF_RECEIVER = 1 << 1  # aioesphomeapi RadioFrequencyCapability.RECEIVER
+BROADLINK = "broadlink"
+DATA_RECEIVERS = "rf_devices_esphome_receivers"  # entry id -> (runtime data, {key: info})
+LIST_TIMEOUT = 10  # seconds for the device to list its entities
 
 # Carrier used when the stored code says 433 or 315 MHz but not the exact value.
 DEFAULT_FREQUENCY = {codec.TYPE_RF433: 433_920_000, codec.TYPE_RF315: 315_000_000}
@@ -41,15 +44,14 @@ MAX_PRESS = 3.0
 LENGTH_TOLERANCE = 0.1
 
 
-def carrier_for(packet: codec.Packet, ranges: list[tuple[int, int]]) -> int:
-    """The carrier to ask for: the band's usual one, moved into the transmitter's range.
+def fit_carrier(wanted: int, ranges: list[tuple[int, int]]) -> int:
+    """The carrier to ask for: ``wanted`` moved into the transmitter's range.
 
-    A Broadlink code only says "433" or "315 MHz" (its sweep value is not
-    reliable), and fixed-frequency adapters accept exactly one value.
+    Fixed-frequency adapters accept exactly one value; one within 5 MHz is
+    used instead (e.g. a 433.92 MHz module for a 433.42 MHz Somfy motor: it
+    may work at a short distance). A range of (0, 0) means "not declared".
     """
-    if packet.type not in DEFAULT_FREQUENCY:
-        raise HomeAssistantError("Only RF codes can be sent through a radio_frequency transmitter")
-    wanted = DEFAULT_FREQUENCY[packet.type]
+    ranges = [(low, high) for low, high in ranges if high > 0]
     if not ranges or any(low <= wanted <= high for low, high in ranges):
         return wanted
     low, high = min(ranges, key=lambda r: min(abs(r[0] - wanted), abs(r[1] - wanted)))
@@ -58,6 +60,17 @@ def carrier_for(packet: codec.Packet, ranges: list[tuple[int, int]]) -> int:
             f"This transmitter does not work at {wanted / 1_000_000:g} MHz"
         )
     return min(max(wanted, low), high)
+
+
+def carrier_for(packet: codec.Packet, ranges: list[tuple[int, int]]) -> int:
+    """The carrier for a stored code: the band's usual one, moved into the range.
+
+    A Broadlink code only says "433" or "315 MHz" (its sweep value is not
+    reliable), and fixed-frequency adapters accept exactly one value.
+    """
+    if packet.type not in DEFAULT_FREQUENCY:
+        raise HomeAssistantError("Only RF codes can be sent through a radio_frequency transmitter")
+    return fit_carrier(DEFAULT_FREQUENCY[packet.type], ranges)
 
 
 def select_bursts(bursts: list[list[int]]) -> list[list[int]]:
@@ -83,14 +96,30 @@ class RadioFrequencyTransmitter(Transmitter):
         return list(entity.supported_frequency_ranges)
 
     async def async_send(self, code: str) -> None:
+        packet = codec.decode(code)
+        timings, repeat = codec.to_timings(code)
+        await self._async_send_ook(carrier_for(packet, self._ranges()), timings, repeat)
+
+    async def async_send_timings(self, timings: list[int], frequency_hz: int, repeat: int = 0) -> None:
+        await self._async_send_ook(fit_carrier(int(frequency_hz), self._ranges()), timings, repeat)
+
+    def carrier_note(self, frequency_hz: int) -> str | None:
+        try:
+            carrier = fit_carrier(int(frequency_hz), self._ranges())
+        except HomeAssistantError as err:
+            return str(err)
+        if abs(carrier - frequency_hz) > 50_000:
+            return (
+                f"This transmitter works at {carrier / 1_000_000:g} MHz, not "
+                f"{frequency_hz / 1_000_000:g} MHz: it may only reach the receiver from close by"
+            )
+        return None
+
+    async def _async_send_ook(self, carrier: int, timings: list[int], repeat: int) -> None:
         from homeassistant.components.radio_frequency import async_send_command
         from rf_protocols.commands.ook import OOKCommand
 
-        packet = codec.decode(code)
-        timings, repeat = codec.to_timings(code)
-        command = OOKCommand(
-            frequency=carrier_for(packet, self._ranges()), timings=timings, repeat_count=repeat
-        )
+        command = OOKCommand(frequency=carrier, timings=timings, repeat_count=repeat)
         debug.trace(
             self.hass, "rf_send", transmitter=self.entity_id, carrier=command.frequency,
             repeat=repeat, pulses=len(timings), timings=debug.clip(timings),
@@ -100,46 +129,89 @@ class RadioFrequencyTransmitter(Transmitter):
         # the burst to end so the hub's pause between codes starts after it.
         await asyncio.sleep(sum(abs(t) for t in timings) * (repeat + 1) / 1_000_000)
 
-    # ---------- learning (ESPHome only) ----------
+    # ---------- receiving (ESPHome only) ----------
+
+    @property
+    def sweeps(self) -> bool:
+        return self.platform == BROADLINK
+
+    def _broadlink(self):
+        """A Broadlink's radio_frequency entity learns as its remote does: same device."""
+        from .remote import RemoteTransmitter
+
+        return RemoteTransmitter(self.hass, self.hub, self.entity_id)
 
     def _esphome(self):
-        """The ESPHome runtime data and the keys of its RF receivers."""
+        """The ESPHome runtime data and its RF receivers (see ``esphome_receivers``)."""
         if self.platform != ESPHOME:
             raise LearnError(
-                "Only ESPHome devices can learn through a radio_frequency transmitter"
+                "Only ESPHome and Broadlink devices can learn through a radio_frequency transmitter"
             )
-        entry = self.hass.config_entries.async_get_entry(self.registry_entry.config_entry_id)
-        data = getattr(entry, "runtime_data", None) if entry else None
-        if data is None or not hasattr(data, "client"):
-            raise LearnError("The ESPHome integration is not loaded for this device")
-        receivers = {
-            info.key: info
-            for infos in getattr(data, "info", {}).values()
-            for info in infos.values()
-            if type(info).__name__ == "RadioFrequencyInfo"
-            and getattr(info, "capabilities", 0) & RF_RECEIVER
-        }
-        if not receivers:
-            raise LearnError(
-                "This ESPHome device has no RF receiver (ir_rf_proxy with remote_receiver_id)"
-            )
-        if not getattr(data, "available", False):
+        if not getattr(_esphome_data(self.hass, self.registry_entry.config_entry_id), "available", False):
             raise LearnError("The ESPHome device is not connected")
-        return data, receivers
+        return esphome_receivers(self.hass, self.registry_entry.config_entry_id)
 
     def learn_problem(self) -> str | None:
+        if self.platform == BROADLINK:
+            return self._broadlink().learn_problem()
         try:
             self._esphome()
+        except ReceiversUnknown:
+            # Not asked yet: ask now for the next look, and let a capture try
+            # (it asks again and reports the real answer).
+            self._refresh_soon()
         except LearnError as err:
             return str(err)
         return None
 
+    def _refresh_soon(self) -> None:
+        self.hass.async_create_background_task(
+            async_refresh_receivers(self.hass, self.registry_entry.config_entry_id),
+            "rf_devices list ESPHome receivers",
+        )
+
+    def receiver_problem(self) -> str | None:
+        if self.platform != ESPHOME:
+            return "Only ESPHome devices can listen through a radio_frequency transmitter"
+        try:
+            esphome_receivers(self.hass, self.registry_entry.config_entry_id)
+        except ReceiversUnknown:
+            self._refresh_soon()
+        except LearnError as err:
+            return str(err)
+        return None
+
+    @property
+    def esphome_entry_id(self) -> str | None:
+        return self.registry_entry.config_entry_id if self.platform == ESPHOME else None
+
+    def _receiver_for_me(self, receivers: dict) -> object:
+        """With several radios, the receiver whose frequency is closest to this transmitter's."""
+        try:
+            ranges = [(lo, hi) for lo, hi in self._ranges() if hi > 0]
+        except HomeAssistantError:
+            ranges = []
+        if not ranges or len(receivers) == 1:
+            return next(iter(receivers.values()))
+        mine = (ranges[0][0] + ranges[0][1]) / 2
+        return min(receivers.values(), key=lambda i: abs(receiver_frequency(i) - mine) if receiver_frequency(i) else 1e12)
+
     async def async_learn(self, frequency: float | None) -> AsyncIterator[LearnEvent]:
-        data, receivers = self._esphome()
+        if self.platform == BROADLINK:
+            async for event in self._broadlink().async_learn(frequency):
+                yield event
+            return
+        await async_refresh_receivers(self.hass, self.registry_entry.config_entry_id)
+        try:
+            data, receivers = self._esphome()
+        except LearnError as err:
+            yield LearnEvent("error", {"message": str(err)})
+            return
         debug.trace(self.hass, "rx_receivers", receivers=[debug.info_dict(i) for i in receivers.values()])
-        info = next(iter(receivers.values()))
-        fixed = info.frequency_min if info.frequency_min and info.frequency_min == info.frequency_max else 0
+        info = self._receiver_for_me(receivers)
+        fixed = receiver_frequency(info)
         frequency_mhz = round(fixed / 1_000_000, 2) if fixed else None
+        receivers = {info.key: info}  # only the radio that matches this transmitter
 
         bursts: list[list[int]] = []
         first: float | None = None
@@ -192,3 +264,93 @@ class RadioFrequencyTransmitter(Transmitter):
             yield LearnEvent("timeout", {"during": "press"})
             return
         yield LearnEvent("captured", codec.capture_result(codec.from_timings(kept), frequency_mhz))
+
+
+def receiver_frequency(info) -> int:
+    """The fixed frequency a receiver declares (Hz), or 0."""
+    low = getattr(info, "frequency_min", 0) or 0
+    high = getattr(info, "frequency_max", 0) or 0
+    if low and low == high:
+        return int(low)
+    return int(getattr(info, "receiver_frequency", 0) or 0)
+
+
+class ReceiversUnknown(LearnError):
+    """The device has not been asked for its receivers yet (``async_refresh_receivers``)."""
+
+
+def _esphome_data(hass, config_entry_id: str | None):
+    entry = hass.config_entries.async_get_entry(config_entry_id) if config_entry_id else None
+    data = getattr(entry, "runtime_data", None) if entry else None
+    if data is None or not hasattr(data, "client"):
+        raise LearnError("The ESPHome integration is not loaded for this device")
+    return data
+
+
+def _is_receiver(info) -> bool:
+    return type(info).__name__ == "RadioFrequencyInfo" and bool(
+        getattr(info, "capabilities", 0) & RF_RECEIVER
+    )
+
+
+async def async_refresh_receivers(hass, config_entry_id: str | None) -> None:
+    """Ask an ESPHome device for its RF receivers and remember them.
+
+    Home Assistant's ESPHome integration keeps only the entity infos it
+    makes entities from, and it makes none for RF receivers, so they are
+    not in its runtime data: the device's own entity list is the only place
+    that names them.
+    """
+    try:
+        data = _esphome_data(hass, config_entry_id)
+    except LearnError:
+        return
+    if not getattr(data, "available", False):
+        return
+    try:
+        infos, _services = await asyncio.wait_for(data.client.list_entities_services(), LIST_TIMEOUT)
+    except Exception as err:  # noqa: BLE001 - aioesphomeapi raises its own errors
+        _LOGGER.warning("Could not list the entities of the ESPHome device: %s", err)
+        debug.trace(hass, "rx_list_error", entry=config_entry_id, message=f"{type(err).__name__}: {err}")
+        return
+    receivers = {info.key: info for info in infos if _is_receiver(info)}
+    hass.data.setdefault(DATA_RECEIVERS, {})[config_entry_id] = (data, receivers)
+    debug.trace(
+        hass, "rx_listed", entry=config_entry_id,
+        rf_ir=[debug.info_dict(i) for i in infos if type(i).__name__ in debug.RF_INFO_TYPES],
+    )
+
+
+def listed_receivers(hass, config_entry_id: str | None) -> dict | None:
+    """Receivers found by the last ``async_refresh_receivers`` (None: never asked)."""
+    cached = hass.data.get(DATA_RECEIVERS, {}).get(config_entry_id)
+    if cached is None:
+        return None
+    entry = hass.config_entries.async_get_entry(config_entry_id) if config_entry_id else None
+    if cached[0] is not getattr(entry, "runtime_data", None):
+        return None  # the ESPHome entry was reloaded since
+    return cached[1]
+
+
+def esphome_receivers(hass, config_entry_id: str | None) -> tuple[object, dict]:
+    """ESPHome runtime data of a config entry and its RF receivers by key.
+
+    Raises ``ReceiversUnknown`` until the device has been asked
+    (``async_refresh_receivers``), and ``LearnError`` when it has none.
+    """
+    data = _esphome_data(hass, config_entry_id)
+    receivers = {
+        info.key: info
+        for infos in getattr(data, "info", {}).values()
+        for info in infos.values()
+        if _is_receiver(info)
+    }
+    listed = listed_receivers(hass, config_entry_id)
+    receivers.update(listed or {})
+    if not receivers:
+        if listed is None:
+            raise ReceiversUnknown("The ESPHome device has not been asked for its RF receivers yet")
+        raise LearnError(
+            "This ESPHome device has no RF receiver (ir_rf_proxy with remote_receiver_id)"
+        )
+    return data, receivers

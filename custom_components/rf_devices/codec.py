@@ -147,6 +147,13 @@ RECEIVED_GAP_US = 10000
 MIN_RECEIVED_PULSES = 16
 
 
+def kind_for_frequency(frequency_hz: float | None) -> int:
+    """Broadlink packet type for a carrier (433 MHz band unless it is near 315)."""
+    if frequency_hz and 300e6 <= frequency_hz < 350e6:
+        return TYPE_RF315
+    return TYPE_RF433
+
+
 def to_timings(code: str | bytes) -> tuple[list[int], int]:
     """Signed microseconds (+on / −off) and repeat count, as HA's RF API wants them."""
     packet = decode(code)
@@ -156,7 +163,7 @@ def to_timings(code: str | bytes) -> tuple[list[int], int]:
     return timings, packet.repeat
 
 
-def from_timings(bursts: list[list[int]], kind: int = TYPE_RF433) -> str:
+def from_timings(bursts: list[list[int]], kind: int = TYPE_RF433, repeat: int = 0) -> str:
     """Build a Broadlink packet (base64) from received signed-microsecond bursts.
 
     A receiver may deliver a remote's burst of repeated frames as one list
@@ -185,7 +192,7 @@ def from_timings(bursts: list[list[int]], kind: int = TYPE_RF433) -> str:
     if not pulses_us:
         raise CodecError("Nothing was received")
     ticks = [max(1, round(us / TICK_US)) for us in pulses_us]
-    return to_b64(encode(Packet(kind, 0, ticks)))
+    return to_b64(encode(Packet(kind, repeat, ticks)))
 
 
 def _describe(pulses: list[int]) -> tuple[str, str]:

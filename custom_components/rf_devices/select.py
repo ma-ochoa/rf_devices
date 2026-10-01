@@ -77,6 +77,12 @@ class RFColorSelect(RFEntity, SelectEntity):
         self.index = (self.index + steps) % len(self._attr_options)
         self.async_write_ha_state()
 
+    async def async_follow_remote(self, role: str) -> bool:
+        if role != ROLE_LIGHT_COLOR:
+            return False
+        self.advance()
+        return True
+
     @callback
     def async_set_measured(self, index: int) -> None:
         """The power aligner recognised the mode from the lamp's draw."""

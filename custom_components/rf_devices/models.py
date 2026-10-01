@@ -16,6 +16,23 @@ Stored device::
     }
 
 Commands whose role starts with ``x_`` are extra buttons on any device type.
+
+A command is one of three kinds (``kind``, "rf" when missing):
+
+* ``rf``: a captured code (Broadlink packet, base64) sent by the transmitter.
+* ``somfy``: a Somfy RTS button; the frame is built on every press from the
+  device's ``somfy`` address and its rolling code (kept in the store).
+* ``action``: a Home Assistant service call, e.g. ``cover.open_cover`` on an
+  entity of another integration (ESPSomfy RTS, ble_adv, an ESPHome button…).
+
+Device fields besides the commands::
+
+    "somfy": {"address": 1193046, "invert": false, "repeats": 4},  # or null
+    "linked_entity": "cover.salon",   # entity of another integration, or null
+    "linked_light_entity": null,      # a fan's lamp in that integration
+    "mirror": true,                   # copy its state (it knows the real one)
+    "follow": false,                  # listen to the original remote (RF receiver)
+    "follow_somfy": [1193047],        # addresses of the real Somfy remotes to follow
 """
 
 from __future__ import annotations
@@ -71,6 +88,7 @@ from .const import (
     TYPE_SWITCH,
     WALL_ACTIONS,
 )
+from .protocols import somfy
 
 ROLE_RE = re.compile(r"^[a-z0-9_]{1,40}$")
 
@@ -93,8 +111,14 @@ def _role(value: Any) -> str:
     return value
 
 
-COMMAND_SCHEMA = vol.Schema(
+KIND_RF = "rf"
+KIND_SOMFY = "somfy"
+KIND_ACTION = "action"
+COMMAND_KINDS = (KIND_RF, KIND_SOMFY, KIND_ACTION)
+
+RF_COMMAND_SCHEMA = vol.Schema(
     {
+        vol.Optional("kind"): KIND_RF,
         vol.Required(ATTR_CODE): _code,
         vol.Optional(ATTR_FREQUENCY): vol.Any(None, vol.Coerce(float)),
         vol.Optional(ATTR_LEARNED): vol.Any(None, str),
@@ -108,6 +132,61 @@ COMMAND_SCHEMA = vol.Schema(
 )
 
 _ENTITY_ID = vol.Any(None, vol.Match(r"^[a-z_]+\.[a-z0-9_]+$"))
+_SERVICE = vol.Match(r"^[a-z0-9_]+\.[a-z0-9_]+$")
+
+SOMFY_COMMAND_SCHEMA = vol.Schema(
+    {
+        vol.Required("kind"): KIND_SOMFY,
+        vol.Required("button"): vol.In(list(somfy.BUTTONS)),
+        vol.Optional(ATTR_LEARNED): vol.Any(None, str),
+        vol.Optional(ATTR_LABEL): vol.Any(None, str),
+        vol.Optional(ATTR_HOLD, default=0): vol.All(vol.Coerce(float), vol.Range(0, 10)),
+    }
+)
+
+ACTION_COMMAND_SCHEMA = vol.Schema(
+    {
+        vol.Required("kind"): KIND_ACTION,
+        vol.Required("service"): _SERVICE,
+        # Target entity; None for services that need none (scene, script with data…).
+        vol.Optional("entity_id", default=None): _ENTITY_ID,
+        vol.Optional("data", default=dict): dict,
+        vol.Optional(ATTR_LEARNED): vol.Any(None, str),
+        vol.Optional(ATTR_LABEL): vol.Any(None, str),
+        vol.Optional(ATTR_HOLD, default=0): vol.All(vol.Coerce(float), vol.Range(0, 10)),
+    }
+)
+
+_COMMAND_SCHEMAS = {
+    KIND_RF: RF_COMMAND_SCHEMA,
+    KIND_SOMFY: SOMFY_COMMAND_SCHEMA,
+    KIND_ACTION: ACTION_COMMAND_SCHEMA,
+}
+
+
+def COMMAND_SCHEMA(value: Any) -> dict:
+    if not isinstance(value, dict):
+        raise vol.Invalid("a command must be a mapping")
+    kind = value.get("kind") or KIND_RF
+    if kind not in _COMMAND_SCHEMAS:
+        raise vol.Invalid(f"unknown command kind: {kind}")
+    return _COMMAND_SCHEMAS[kind](value)
+
+
+def command_kind(cmd: dict | None) -> str | None:
+    return (cmd.get("kind") or KIND_RF) if cmd else None
+
+
+SOMFY_SCHEMA = vol.Schema(
+    {
+        vol.Required("address"): vol.All(vol.Coerce(int), vol.Range(1, somfy.MAX_ADDRESS)),
+        # The motor turns the other way: swap up and down.
+        vol.Optional("invert", default=False): bool,
+        # Frames per press after the first one (4 like the original remotes).
+        vol.Optional("repeats", default=somfy.DEFAULT_REPEATS): vol.All(vol.Coerce(int), vol.Range(0, 20)),
+    }
+)
+
 
 # Feedback and power options shared by on/off devices.
 #   state_entity     real state: a binary entity, or a power sensor (W) compared
@@ -216,6 +295,22 @@ _POWER = {
     vol.Optional("idle_off_to", default="08:00"): _HHMM,
 }
 
+# Covers: powering the motor moves nothing, so the relay may be switched on to
+# send a command. The meter (W, or an on/off "moving" entity) tells when the
+# motor really runs. Wall buttons are independent of the relay: one input steps
+# open → stop → close → stop; with a second one the first opens and it closes.
+# "momentary": push buttons, a press acts; "maintained": a switch or an
+# up/0/down rocker, every change acts (two inputs: back to 0 stops).
+_COVER_POWER = {
+    vol.Optional("power_entity", default=None): _ENTITY_ID,
+    vol.Optional("power_on_allowed", default=True): bool,
+    vol.Optional("power_up_delay", default=1.0): vol.All(vol.Coerce(float), vol.Range(0, 15)),
+    **_FEEDBACK,
+    vol.Optional("switch_entity", default=None): _ENTITY_ID,
+    vol.Optional("switch_close_entity", default=None): _ENTITY_ID,
+    vol.Optional("wall_type", default="momentary"): vol.In(["momentary", "maintained"]),
+}
+
 OPTION_SCHEMAS = {
     TYPE_LIGHT: vol.Schema(
         {
@@ -242,6 +337,7 @@ OPTION_SCHEMAS = {
             vol.Optional("device_class", default="shutter"): vol.In(
                 ["shutter", "blind", "curtain", "awning", "garage", "gate", "shade"]
             ),
+            **_COVER_POWER,
         }
     ),
     TYPE_FAN: vol.Schema(
@@ -301,6 +397,16 @@ DEVICE_SCHEMA = vol.Schema(
             None, vol.All(vol.Coerce(float), vol.Range(0, 5))
         ),
         vol.Optional("commands", default=dict): {_role: COMMAND_SCHEMA},
+        # Somfy RTS virtual remote of this device (its rolling code is in the store).
+        vol.Optional("somfy", default=None): vol.Any(None, SOMFY_SCHEMA),
+        # Entity of another integration that really drives the device.
+        vol.Optional("linked_entity", default=None): _ENTITY_ID,
+        # A fan's lamp may be another entity of that integration (ble_adv…).
+        vol.Optional("linked_light_entity", default=None): _ENTITY_ID,
+        vol.Optional("mirror", default=False): bool,
+        # Listen to the original remote (needs an RF receiver) and follow its presses.
+        vol.Optional("follow", default=False): bool,
+        vol.Optional("follow_somfy", default=list): [vol.All(vol.Coerce(int), vol.Range(1, somfy.MAX_ADDRESS))],
         # Revision, bumped on every save: an editor holding an older copy is
         # refused instead of overwriting newer changes.
         vol.Optional("rev", default=0): vol.All(vol.Coerce(int), vol.Range(min=0)),
@@ -316,6 +422,10 @@ def validate_device(data: dict) -> dict:
     """Validate and normalise a device; assigns an id when missing."""
     device = DEVICE_SCHEMA(data)
     device["options"] = OPTION_SCHEMAS[device["type"]](device["options"])
+    if device["somfy"] is None and any(
+        command_kind(cmd) == KIND_SOMFY for cmd in device["commands"].values()
+    ):
+        raise vol.Invalid("Somfy buttons need the device's Somfy remote (address)")
     if not device.get("id"):
         device["id"] = new_id()
     return device

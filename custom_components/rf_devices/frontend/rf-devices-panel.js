@@ -43,6 +43,38 @@ const I18N = {
     open_time: "Tiempo de subida (s)",
     close_time: "Tiempo de bajada (s)",
     times_help: "Con los dos tiempos se calcula la posición y se puede elegir un porcentaje (necesita el botón Parar).",
+    cover_wiring_q: "¿Tiene relé o botones de pared?",
+    cover_wiring_none: "Nada: solo el mando RF",
+    cover_wiring_wall: "Solo botones de pared",
+    cover_wiring_relay: "Un relé le da corriente",
+    cover_wiring_relay_wall: "Relé y botones de pared",
+    cover_relay_intro: "Todo es opcional. Sin nada de esto la persiana funciona por tiempo con el mando RF.",
+    cover_relay_help: "Relé (Shelly, enchufe…) que da corriente al motor. Con el relé apagado no se envía nada.",
+    cover_power_on: "Encender el relé cuando haga falta para mover la persiana",
+    cover_power_up_delay_help: "Tiempo que se deja al receptor del motor para arrancar antes de enviar la orden.",
+    cover_wall_type: "Tipo de botones",
+    cover_wall_momentary: "Pulsadores (vuelven solos)",
+    cover_wall_maintained: "Interruptor o conmutador subir/0/bajar (se queda puesto)",
+    cover_wall_one: "Entrada del botón",
+    cover_wall_up: "Entrada del botón de subir",
+    cover_wall_down: "Entrada del botón de bajar (opcional)",
+    cover_wall_one_help: "Un pulsador: cada pulsación da un paso: subir → parar → bajar → parar.",
+    cover_wall_one_maintained_help: "Un interruptor: cada cambio de posición da un paso: subir → parar → bajar → parar.",
+    cover_wall_two_help: "Dos pulsadores: uno sube y otro baja; cualquier pulsación mientras se mueve la para.",
+    cover_wall_two_maintained_help: "Conmutador subir/0/bajar: sube o baja mientras está puesto y se para al volver al centro.",
+    cover_meter_help: "Opcional. Un sensor de consumo (W) del motor, o una entidad encendido/apagado que diga si se mueve. En una subida o bajada completa, la persiana se da por llegada cuando el motor se para en su final de carrera, no cuando pasa el tiempo: así 0 % y 100 % se corrigen solos. Si se mueve con el mando original, el atributo position_reliable pasa a false hasta el siguiente recorrido completo.",
+    cover_threshold: "El motor está en marcha por encima de (W)",
+    measure_title: "Cronometrar el recorrido",
+    measure_open: "Cronometrar subida",
+    measure_close: "Cronometrar bajada",
+    measure_help: "Para la subida, deja antes la persiana bajada del todo (y al revés para la bajada). Al pulsar se envía la orden y empieza a contar; pulsa «Ha llegado» cuando termine el recorrido. El tiempo se guarda arriba y puedes retocarlo a mano para el ajuste fino.",
+    measure_save_first: "Guarda el dispositivo con los botones Subir y Bajar aprendidos para poder cronometrar el recorrido.",
+    measure_opening: "Subiendo…",
+    measure_closing: "Bajando…",
+    measure_arrived: "Ha llegado",
+    measure_cancel: "Cancelar",
+    measure_running: "Pulsa «Ha llegado» en el momento en que la persiana termine el recorrido.",
+    measure_running_meter: "Se parará solo cuando el medidor vea que el motor se detiene; también puedes pulsar «Ha llegado».",
     device_class: "Clase",
     speeds: "Velocidades",
     fan_light: "Luz del ventilador",
@@ -315,6 +347,55 @@ const I18N = {
     st_unreachable_rx: "El receptor no responde, así que no se ha empezado a capturar. Comprueba que el dispositivo esté conectado a Home Assistant.",
     frequency: "{f} MHz",
     entities: "Entidades",
+    control_title: "Cómo se controla",
+    control_rf: "Códigos RF capturados (Broadlink, ESP32 + CC1101…)",
+    control_somfy: "Somfy RTS generado (mando virtual)",
+    control_linked: "Otra integración (ESPSomfy RTS, ble_adv, ESPHome…)",
+    control_help: "Con códigos RF se captura cada botón del mando original. Somfy RTS cambia el código en cada pulsación, así que RF Devices hace de mando nuevo y hay que emparejarlo con el motor. Con otra integración, cada botón llama a una acción de Home Assistant y el estado se copia de su entidad.",
+    somfy_address: "Dirección del mando virtual",
+    somfy_new: "Nueva dirección",
+    somfy_new_confirm: "Con una dirección nueva el motor deja de reconocer este mando hasta que lo vuelvas a emparejar. ¿Continuar?",
+    somfy_invert: "El motor gira al revés (intercambiar subir y bajar)",
+    somfy_repeats: "Repeticiones por pulsación",
+    somfy_code: "Último código enviado: {n}",
+    somfy_pair: "Emparejar (PROG)",
+    somfy_pair_help: "1) En un mando que ya mueva la persiana, mantén pulsado PROG (detrás) hasta que la persiana suba y baje un poco. 2) Antes de 2 minutos, pulsa «Emparejar»: la persiana vuelve a moverse y el mando virtual queda emparejado. Repetir el proceso lo desempareja. Los motores admiten unos 12 mandos: no emparejes mandos de prueba sin necesidad y no pierdas el mando original.",
+    somfy_pair_sent: "PROG enviado: la persiana debería moverse un poco.",
+    somfy_note: "Aviso: {msg}",
+    somfy_fill: "Asignar los botones Somfy",
+    somfy_button: "Botón Somfy",
+    somfy_needs_save: "Guarda el dispositivo antes de emparejar.",
+    b_up: "Subir", b_down: "Bajar", b_my: "My / parar", b_my_up: "My + subir", b_my_down: "My + bajar",
+    b_up_down: "Subir + bajar", b_prog: "PROG", b_sun_flag: "Sol", b_flag: "Bandera",
+    kind_somfy: "Somfy · {b}",
+    kind_action: "Acción · {svc}",
+    more_action: "Acción de Home Assistant…",
+    more_somfy: "Botón Somfy…",
+    action_title: "Acción de Home Assistant — {role}",
+    action_service: "Acción (servicio)",
+    action_entity: "Entidad",
+    action_data: "Datos adicionales (JSON, opcional)",
+    action_help: "Por ejemplo: cover.open_cover sobre la persiana de ESPSomfy RTS, fan.set_percentage con {\"percentage\": 50} sobre un ventilador de ble_adv, o button.press sobre un botón de ESPHome.",
+    action_bad_json: "Los datos adicionales no son un JSON válido.",
+    action_bad_service: "Escribe la acción como dominio.servicio (p. ej. cover.open_cover).",
+    linked_entity: "Entidad que controla el aparato",
+    linked_light: "Entidad de la luz (si la integración la separa)",
+    linked_help: "RF Devices llama a esta entidad y copia su estado: ESPSomfy RTS escucha los mandos y ble_adv recuerda lo que envía.",
+    mirror: "Copiar su estado (recomendado)",
+    linked_fill: "Rellenar los botones con sus acciones",
+    linked_filled: "Botones rellenados con las acciones de {e}.",
+    linked_none: "No hay entidades de otras integraciones de este tipo.",
+    follow: "Seguir el mando original",
+    follow_help: "El receptor escucha siempre: si alguien usa el mando de siempre, RF Devices actualiza el estado sin enviar nada. Cada pulsación reconocida lanza el evento rf_devices_remote (útil en automatizaciones, p. ej. para una alarma).",
+    follow_problem: "No se puede escuchar con este emisor: {msg}",
+    follow_somfy: "Mandos Somfy reales que se siguen",
+    follow_somfy_none: "Ninguno todavía.",
+    follow_somfy_detect: "Detectar un mando Somfy",
+    follow_somfy_found: "Mando {hex} · botón {b} · código {c}",
+    follow_somfy_add: "Seguir este mando",
+    follow_somfy_nothing: "No se ha reconocido ninguna trama Somfy en la captura.",
+    follow_somfy_title: "Detectar un mando Somfy",
+    remove_short: "Quitar",
   },
   en: {
     title: "RF Devices",
@@ -356,6 +437,38 @@ const I18N = {
     open_time: "Opening time (s)",
     close_time: "Closing time (s)",
     times_help: "With both times the position is estimated and a percentage can be set (needs the Stop button).",
+    cover_wiring_q: "Does it have a relay or wall buttons?",
+    cover_wiring_none: "Nothing: the RF remote only",
+    cover_wiring_wall: "Wall buttons only",
+    cover_wiring_relay: "A relay powers it",
+    cover_wiring_relay_wall: "A relay and wall buttons",
+    cover_relay_intro: "All optional. Without any of this the cover works by time with the RF remote.",
+    cover_relay_help: "Relay (Shelly, plug…) that powers the motor. Nothing is sent while the relay is off.",
+    cover_power_on: "Switch the relay on when needed to move the cover",
+    cover_power_up_delay_help: "Time given to the motor's receiver to start before the command is sent.",
+    cover_wall_type: "Kind of buttons",
+    cover_wall_momentary: "Push buttons (spring back)",
+    cover_wall_maintained: "Switch or up/0/down rocker (stays put)",
+    cover_wall_one: "Button input",
+    cover_wall_up: "Up button input",
+    cover_wall_down: "Down button input (optional)",
+    cover_wall_one_help: "One push button: every press is one step: open → stop → close → stop.",
+    cover_wall_one_maintained_help: "One switch: every change of position is one step: open → stop → close → stop.",
+    cover_wall_two_help: "Two push buttons: one opens, the other closes; any press while it moves stops it.",
+    cover_wall_two_maintained_help: "Up/0/down rocker: it opens or closes while held in place and stops when back at the centre.",
+    cover_meter_help: "Optional. A power sensor (W) of the motor, or an on/off entity telling whether it moves. On a full opening or closing the cover arrives when the motor stops at its limit switch, not when the time is up, so 0 % and 100 % correct themselves. If the original remote moves it, the position_reliable attribute turns false until the next full travel.",
+    cover_threshold: "The motor is running above (W)",
+    measure_title: "Time the travel",
+    measure_open: "Time the opening",
+    measure_close: "Time the closing",
+    measure_help: "For the opening, leave the cover fully closed first (and the other way round for the closing). Pressing sends the command and starts the clock; press “It has arrived” when the travel ends. The time is stored above and can be fine-tuned by hand.",
+    measure_save_first: "Save the device with the Open and Close buttons learned to time the travel.",
+    measure_opening: "Opening…",
+    measure_closing: "Closing…",
+    measure_arrived: "It has arrived",
+    measure_cancel: "Cancel",
+    measure_running: "Press “It has arrived” the moment the cover ends its travel.",
+    measure_running_meter: "It stops by itself when the meter sees the motor stop; you can also press “It has arrived”.",
     device_class: "Class",
     speeds: "Speeds",
     fan_light: "Fan light",
@@ -628,11 +741,75 @@ const I18N = {
     st_unreachable_rx: "The receiver is not answering, so capturing did not start. Check that the device is connected to Home Assistant.",
     frequency: "{f} MHz",
     entities: "Entities",
+    control_title: "How it is controlled",
+    control_rf: "Captured RF codes (Broadlink, ESP32 + CC1101…)",
+    control_somfy: "Generated Somfy RTS (virtual remote)",
+    control_linked: "Another integration (ESPSomfy RTS, ble_adv, ESPHome…)",
+    control_help: "With RF codes each button of the original remote is captured. Somfy RTS changes its code on every press, so RF Devices acts as a new remote that must be paired with the motor. With another integration each button calls a Home Assistant action and the state is copied from its entity.",
+    somfy_address: "Virtual remote address",
+    somfy_new: "New address",
+    somfy_new_confirm: "With a new address the motor stops recognising this remote until you pair it again. Continue?",
+    somfy_invert: "The motor turns the other way (swap up and down)",
+    somfy_repeats: "Repeats per press",
+    somfy_code: "Last code sent: {n}",
+    somfy_pair: "Pair (PROG)",
+    somfy_pair_help: "1) On a remote that already moves the blind, hold PROG (at the back) until the blind jogs up and down. 2) Within 2 minutes, press “Pair”: the blind jogs again and the virtual remote is paired. Doing it again unpairs it. Motors accept about 12 remotes: do not pair test remotes needlessly, and keep the original remote.",
+    somfy_pair_sent: "PROG sent: the blind should jog a little.",
+    somfy_note: "Warning: {msg}",
+    somfy_fill: "Assign the Somfy buttons",
+    somfy_button: "Somfy button",
+    somfy_needs_save: "Save the device before pairing.",
+    b_up: "Up", b_down: "Down", b_my: "My / stop", b_my_up: "My + up", b_my_down: "My + down",
+    b_up_down: "Up + down", b_prog: "PROG", b_sun_flag: "Sun", b_flag: "Flag",
+    kind_somfy: "Somfy · {b}",
+    kind_action: "Action · {svc}",
+    more_action: "Home Assistant action…",
+    more_somfy: "Somfy button…",
+    action_title: "Home Assistant action — {role}",
+    action_service: "Action (service)",
+    action_entity: "Entity",
+    action_data: "Extra data (JSON, optional)",
+    action_help: "For example: cover.open_cover on an ESPSomfy RTS blind, fan.set_percentage with {\"percentage\": 50} on a ble_adv fan, or button.press on an ESPHome button.",
+    action_bad_json: "The extra data is not valid JSON.",
+    action_bad_service: "Write the action as domain.service (e.g. cover.open_cover).",
+    linked_entity: "Entity that drives the device",
+    linked_light: "Light entity (if the integration keeps it apart)",
+    linked_help: "RF Devices calls this entity and copies its state: ESPSomfy RTS listens to the remotes and ble_adv remembers what it sends.",
+    mirror: "Copy its state (recommended)",
+    linked_fill: "Fill the buttons with its actions",
+    linked_filled: "Buttons filled with the actions of {e}.",
+    linked_none: "No entities of this kind from other integrations.",
+    follow: "Follow the original remote",
+    follow_help: "The receiver listens all the time: when someone uses the usual remote, RF Devices updates the state without sending anything. Every recognised press fires the rf_devices_remote event (handy in automations, e.g. for an alarm).",
+    follow_problem: "This transmitter cannot listen: {msg}",
+    follow_somfy: "Real Somfy remotes followed",
+    follow_somfy_none: "None yet.",
+    follow_somfy_detect: "Detect a Somfy remote",
+    follow_somfy_found: "Remote {hex} · button {b} · code {c}",
+    follow_somfy_add: "Follow this remote",
+    follow_somfy_nothing: "No Somfy frame was recognised in the capture.",
+    follow_somfy_title: "Detect a Somfy remote",
+    remove_short: "Remove",
   },
 };
 
 const TYPE_ICONS = { light: "💡", switch: "🔌", cover: "🪟", fan: "🌀", buttons: "🎛️" };
 const COVER_CLASSES = ["shutter", "blind", "curtain", "awning", "shade", "garage", "gate"];
+// Somfy button a role gets by default (a Somfy light receiver: up = on, down = off).
+const SOMFY_DEFAULT = { open: "up", close: "down", stop: "my", on: "up", off: "down", toggle: "my" };
+// Actions offered for a service field, by the domain of the target entity.
+const SERVICES = {
+  cover: ["cover.open_cover", "cover.close_cover", "cover.stop_cover", "cover.set_cover_position"],
+  light: ["light.turn_on", "light.turn_off", "light.toggle"],
+  switch: ["switch.turn_on", "switch.turn_off", "switch.toggle"],
+  fan: ["fan.turn_on", "fan.turn_off", "fan.set_percentage", "fan.set_preset_mode", "fan.set_direction", "fan.toggle"],
+  button: ["button.press"],
+  script: ["script.turn_on"],
+  scene: ["scene.turn_on"],
+  input_boolean: ["input_boolean.turn_on", "input_boolean.turn_off", "input_boolean.toggle"],
+  remote: ["remote.send_command"],
+};
+const hasCode = (c) => !!(c && (c.code || c.kind === "somfy" || c.kind === "action"));
 
 const esc = (v) =>
   String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -732,6 +909,8 @@ class RFDevicesPanel extends HTMLElement {
   set panel(v) {}
 
   disconnectedCallback() {
+    if (this._state.measure) clearInterval(this._state.measure.timer);
+    this._state.measure = null;
     this._stopLearn();
     if (this._liveUnsub) this._liveUnsub().catch(() => {});
     this._liveUnsub = null;
@@ -842,17 +1021,19 @@ class RFDevicesPanel extends HTMLElement {
     clearTimeout(this._saveTimer);
     const d = this._state.draft;
     if (!d || !d.name.trim()) return false;
-    const commands = Object.fromEntries(Object.entries(d.commands).filter(([, c]) => c.code));
+    const commands = Object.fromEntries(Object.entries(d.commands).filter(([, c]) => hasCode(c)));
     this._state.saveStatus = "saving";
     this._paintStatus();
     try {
-      const saved = await this.ws({ type: "rf_devices/device/save", device: { ...d, commands } });
+      const plain = Object.fromEntries(Object.entries(d).filter(([k]) => !k.startsWith("_")));
+      const saved = await this.ws({ type: "rf_devices/device/save", device: { ...plain, commands } });
       // The server may change names (take the relay's name) or assign the id.
       d.id = saved.id;
       d.name = saved.name;
       d.rev = saved.rev;
       for (const k of ["light_name", "take_relay_name", "take_name_backup", "take_relay_entity_id",
         "entity_id_backup", "power_entity"]) d.options[k] = saved.options[k];
+      for (const k of ["somfy_code", "somfy_note", "follow_problem"]) d[k] = saved[k];
       const i = this._state.devices.findIndex((x) => x.id === saved.id);
       if (i >= 0) this._state.devices[i] = saved;
       else this._state.devices.push(saved);
@@ -915,7 +1096,7 @@ class RFDevicesPanel extends HTMLElement {
     d.options =
       type === "light" ? { mode: "toggle", switch_entity: null, state_entity: null, state_threshold: 3, power_entity: null, power_on_allowed: false }
       : type === "switch" ? { mode: "onoff", switch_entity: null, state_entity: null, state_threshold: 3, power_entity: null }
-      : type === "cover" ? { open_time: 0, close_time: 0, device_class: "shutter" }
+      : type === "cover" ? { open_time: 0, close_time: 0, device_class: "shutter", power_entity: null, state_entity: null, state_threshold: 3, switch_entity: null, switch_close_entity: null, wall_type: "momentary" }
       : type === "fan" ? { speeds: 3, power: "off", direction: "none", presets: [], light: "none", light_state_entity: null, light_state_threshold: 3, power_entity: null }
       : {};
     this.render();
@@ -993,7 +1174,10 @@ class RFDevicesPanel extends HTMLElement {
             dlg.frequency = ev.frequency;
             this._state.info.frequencies = { ...(this._state.info.frequencies || {}), [dlg.tx]: ev.frequency };
           }
-          if (ev.stage === "captured") dlg.result = ev;
+          if (ev.stage === "captured") {
+            dlg.result = ev;
+            if (dlg.somfyDetect) this.decodeSomfy(dlg);
+          }
           if (ev.stage === "error") {
             dlg.message = ev.message;
             dlg.reason = ev.reason;
@@ -1125,6 +1309,326 @@ class RFDevicesPanel extends HTMLElement {
     } catch (e) {
       this.toast(e.message, true);
     }
+  }
+
+  // ---------- other kinds of buttons (Somfy, Home Assistant actions) ----------
+  /** A command as the server stores it (the editor adds analysis and the like). */
+  cleanCmd(c) {
+    const keep = ["kind", "code", "frequency", "learned", "label", "hold", "source", "button", "service", "entity_id", "data"];
+    return Object.fromEntries(Object.entries(c).filter(([k, v]) => keep.includes(k) && v !== undefined));
+  }
+
+  async testRole(role) {
+    const c = this._state.draft.commands[role];
+    if (!c.kind || c.kind === "rf") return this.send(c.code);
+    return this.sendCommand(c);
+  }
+
+  async sendCommand(command) {
+    const d = this._state.draft;
+    try {
+      const r = await this.ws({
+        type: "rf_devices/command/send",
+        device: { id: d.id, name: d.name, transmitter: d.transmitter || null, somfy: d.somfy || null },
+        command: this.cleanCmd(command),
+      });
+      if (r && r.somfy_code !== undefined) d.somfy_code = r.somfy_code;
+      this.toast(this.t("sent"));
+      return true;
+    } catch (e) {
+      this.toast(e.message, true);
+      return false;
+    }
+  }
+
+  controlOf(d) {
+    return d.somfy ? "somfy" : d.linked_entity || d._linking ? "linked" : "rf";
+  }
+
+  async setControl(value) {
+    const d = this._state.draft;
+    if (value !== "somfy" && d.somfy) {
+      d.somfy = null;
+      for (const [role, c] of Object.entries(d.commands)) if (c.kind === "somfy") delete d.commands[role];
+      d.follow_somfy = [];
+    }
+    if (value !== "linked") {
+      d.linked_entity = null;
+      d.linked_light_entity = null;
+      d.mirror = false;
+      d._linking = false;
+    }
+    if (value === "somfy" && !d.somfy) {
+      const { address } = await this.ws({ type: "rf_devices/somfy/new_address" });
+      d.somfy = { address, invert: false, repeats: 4 };
+      d.somfy_code = 0;
+      this.fillSomfy(false);
+    }
+    if (value === "linked") {
+      d._linking = true;
+      d.mirror = true;
+    }
+    this.dirty();
+    this.render();
+  }
+
+  /** Somfy buttons for the roles that have nothing yet (or all of them). */
+  fillSomfy(all = true) {
+    const d = this._state.draft;
+    if (d.type === "light" || d.type === "switch") d.options.mode = "onoff";
+    for (const { role } of slotsFor(d)) {
+      const button = SOMFY_DEFAULT[role];
+      if (!button || (!all && hasCode(d.commands[role]))) continue;
+      d.commands[role] = { kind: "somfy", button, label: d.commands[role]?.label ?? null, hold: 0 };
+    }
+    if (d.type === "buttons" && !Object.keys(d.commands).length) {
+      for (const b of ["up", "my", "down"]) d.commands[`x_${b}`] = { kind: "somfy", button: b, label: this.t("b_" + b), hold: 0 };
+    }
+  }
+
+  async newSomfyAddress() {
+    const d = this._state.draft;
+    if (!confirm(this.t("somfy_new_confirm"))) return;
+    const { address } = await this.ws({ type: "rf_devices/somfy/new_address" });
+    d.somfy = { ...d.somfy, address };
+    d.somfy_code = 0;
+    this.dirty();
+    this.render();
+  }
+
+  async pairSomfy() {
+    if (await this.sendCommand({ kind: "somfy", button: "prog" })) this.toast(this.t("somfy_pair_sent"));
+    this.render();
+  }
+
+  async loadLinkable(kind) {
+    this._state.linkable = this._state.linkable || {};
+    if (this._state.linkable[kind] || this._linkLoading?.[kind]) return;
+    this._linkLoading = { ...(this._linkLoading || {}), [kind]: true };
+    try {
+      this._state.linkable[kind] = await this.ws({ type: "rf_devices/linkable", kind });
+    } catch (e) {
+      this._state.linkable[kind] = [];
+    }
+    this._linkLoading[kind] = false;
+    this.render();
+  }
+
+  /** Buttons that call the linked entity's actions, and options that match it. */
+  fillLinked() {
+    const d = this._state.draft;
+    const eid = d.linked_entity;
+    if (!eid) return;
+    const dom = eid.split(".")[0];
+    const act = (service, data = {}, entity = eid) => ({ kind: "action", service, entity_id: entity, data, label: null, hold: 0 });
+    const st = this._hass.states[eid];
+    const a = st?.attributes || {};
+    const cmds = {};
+    if (d.type === "cover") {
+      Object.assign(cmds, { open: act("cover.open_cover"), close: act("cover.close_cover"), stop: act("cover.stop_cover") });
+    } else if (d.type === "light" || d.type === "switch") {
+      d.options.mode = "onoff";
+      Object.assign(cmds, { on: act(`${dom}.turn_on`), off: act(`${dom}.turn_off`) });
+    } else if (d.type === "fan") {
+      const n = Math.max(1, Math.min(this._state.info.max_speeds, Math.round(100 / (a.percentage_step || 100 / 3))));
+      Object.assign(d.options, { speeds: n, power: "off", turn_on_speed: d.options.turn_on_speed ?? 1 });
+      cmds.off = act("fan.turn_off");
+      for (let i = 1; i <= n; i++) cmds[`speed_${i}`] = act("fan.set_percentage", { percentage: Math.round((i * 100) / n) });
+      const presets = (a.preset_modes || []).slice(0, 6);
+      d.options.presets = presets;
+      presets.forEach((p, i) => (cmds[`preset_${i + 1}`] = act("fan.set_preset_mode", { preset_mode: p })));
+      if ((a.supported_features || 0) & 4) {
+        d.options.direction = "buttons";
+        cmds.forward = act("fan.set_direction", { direction: "forward" });
+        cmds.reverse = act("fan.set_direction", { direction: "reverse" });
+      }
+      if (d.linked_light_entity) {
+        d.options.light = "onoff";
+        if (!d.options.light_name) d.options.light_name = this.defaultLightName();
+        cmds.light_on = act("light.turn_on", {}, d.linked_light_entity);
+        cmds.light_off = act("light.turn_off", {}, d.linked_light_entity);
+      }
+    }
+    for (const [role, c] of Object.entries(cmds)) c.label = d.commands[role]?.label ?? null;
+    for (const role of Object.keys(d.commands)) if (!role.startsWith("x_")) delete d.commands[role];
+    Object.assign(d.commands, cmds);
+    this.toast(this.t("linked_filled", { e: eid }));
+  }
+
+  defaultService(role) {
+    const d = this._state.draft;
+    const eid = role.startsWith("light_") && d.linked_light_entity ? d.linked_light_entity : d.linked_entity;
+    const dom = eid ? eid.split(".")[0] : d.type === "buttons" ? "button" : d.type;
+    const by = {
+      open: "cover.open_cover", close: "cover.close_cover", stop: "cover.stop_cover",
+      on: `${dom}.turn_on`, off: `${dom}.turn_off`, toggle: `${dom}.toggle`, power: "fan.toggle",
+      light_on: "light.turn_on", light_off: "light.turn_off", light_toggle: "light.toggle",
+    };
+    if (role.startsWith("speed_")) return "fan.set_percentage";
+    if (role.startsWith("preset_")) return "fan.set_preset_mode";
+    return by[role] || (dom === "button" ? "button.press" : "");
+  }
+
+  openAction(role) {
+    const d = this._state.draft;
+    const c = d.commands[role];
+    const cur = c?.kind === "action" ? c : null;
+    const entity = cur ? cur.entity_id
+      : role.startsWith("light_") && d.linked_light_entity ? d.linked_light_entity : d.linked_entity;
+    this._state.dialog = {
+      kind: "action", role,
+      service: cur?.service || this.defaultService(role),
+      entity_id: entity || "",
+      data: cur && Object.keys(cur.data || {}).length ? JSON.stringify(cur.data) : "",
+      message: null,
+    };
+    this.render();
+  }
+
+  /** The action typed in the dialog, or null (and a message) if it is not valid. */
+  readAction() {
+    const dlg = this._state.dialog;
+    const root = this.shadowRoot;
+    dlg.service = root.getElementById("action-service").value.trim();
+    dlg.entity_id = root.getElementById("action-entity").value || "";
+    dlg.data = root.getElementById("action-data").value.trim();
+    if (!/^[a-z0-9_]+\.[a-z0-9_]+$/.test(dlg.service)) {
+      dlg.message = this.t("action_bad_service");
+      this.render();
+      return null;
+    }
+    let data = {};
+    if (dlg.data) {
+      try {
+        data = JSON.parse(dlg.data);
+        if (typeof data !== "object" || Array.isArray(data) || data === null) throw new Error();
+      } catch (e) {
+        dlg.message = this.t("action_bad_json");
+        this.render();
+        return null;
+      }
+    }
+    const prev = this._state.draft.commands[dlg.role];
+    return { kind: "action", service: dlg.service, entity_id: dlg.entity_id || null, data, label: prev?.label ?? null, hold: 0 };
+  }
+
+  saveAction() {
+    const cmd = this.readAction();
+    if (!cmd) return;
+    this._state.draft.commands[this._state.dialog.role] = cmd;
+    this._state.dialog = null;
+    this.dirty();
+    this.render();
+  }
+
+  setSomfyButton(role, button) {
+    const d = this._state.draft;
+    const prev = d.commands[role];
+    d.commands[role] = { kind: "somfy", button, label: prev?.label ?? null, hold: prev?.kind === "somfy" ? prev.hold || 0 : 0 };
+    this.dirty();
+    this.render();
+  }
+
+  openSomfyDetect() {
+    const tx = this._state.draft.transmitter || this._state.info.default_transmitter;
+    this._state.dialog = { kind: "learn", role: null, somfyDetect: true, stage: "idle", useKnown: false, knownFreq: null, tx };
+    this.render();
+  }
+
+  async decodeSomfy(dlg) {
+    try {
+      dlg.somfy = await this.ws({ type: "rf_devices/somfy/decode", code: dlg.result.raw });
+    } catch (e) {
+      dlg.somfy = [];
+    }
+    this.render();
+  }
+
+  addFollowSomfy(address) {
+    const d = this._state.draft;
+    d.follow_somfy = [...new Set([...(d.follow_somfy || []), Number(address)])];
+    d.follow = true;
+    this._state.dialog = null;
+    this.dirty();
+    this.render();
+  }
+
+  txInfo(d) {
+    const id = d.transmitter || this._state.info.default_transmitter;
+    return this._state.info.transmitters.find((t) => t.entity_id === id);
+  }
+
+  renderControl(d) {
+    const ctl = this.controlOf(d);
+    const choices = [["rf", this.t("control_rf")]];
+    if (["cover", "light", "switch", "buttons"].includes(d.type)) choices.push(["somfy", this.t("control_somfy")]);
+    if (d.type !== "buttons") choices.push(["linked", this.t("control_linked")]);
+    const body = ctl === "somfy" ? this.renderSomfy(d) : ctl === "linked" ? this.renderLinked(d) : "";
+    return `<div class="form ctl">
+      <h3 class="full">${this.t("control_title")}</h3>
+      <label class="full"><select data-action="control">
+        ${choices.map(([v, l]) => `<option value="${v}" ${ctl === v ? "selected" : ""}>${esc(l)}</option>`).join("")}
+      </select><small>${this.t("control_help")}</small></label>
+      ${body}
+      ${this.renderFollow(d)}
+    </div>`;
+  }
+
+  renderSomfy(d) {
+    const s = d.somfy;
+    const hex = Number(s.address).toString(16).toUpperCase().padStart(6, "0");
+    const note = this.txInfo(d)?.somfy_note;
+    return `
+      <label>${this.t("somfy_address")}<input readonly value="${hex}"></label>
+      <label>${this.t("somfy_repeats")}<input type="number" min="0" max="20" data-somfy="repeats" value="${s.repeats ?? 4}"></label>
+      <label class="check full"><input type="checkbox" data-somfy="invert" ${s.invert ? "checked" : ""}> ${this.t("somfy_invert")}</label>
+      ${d.somfy_code !== undefined && d.somfy_code !== null ? `<small class="full">${this.t("somfy_code", { n: d.somfy_code })}</small>` : ""}
+      ${note ? `<p class="warn-text full">${esc(this.t("somfy_note", { msg: note }))}</p>` : ""}
+      <small class="full">${this.t("somfy_pair_help")}</small>
+      <div class="actions full">
+        <button class="primary" data-action="somfy-pair">${this.t("somfy_pair")}</button>
+        <button data-action="somfy-fill">${this.t("somfy_fill")}</button>
+        <span class="spacer"></span>
+        <button data-action="somfy-new">${this.t("somfy_new")}</button>
+      </div>`;
+  }
+
+  renderLinked(d) {
+    const list = this._state.linkable?.[d.type];
+    if (!list) queueMicrotask(() => this.loadLinkable(d.type));
+    const lights = d.type === "fan" ? this._state.linkable?.fan_light : null;
+    if (d.type === "fan" && !lights) queueMicrotask(() => this.loadLinkable("fan_light"));
+    const options = (items, selected) => {
+      const known = (items || []).some((e) => e.entity_id === selected);
+      return `<option value="">${this.t("none")}</option>
+        ${selected && !known ? `<option value="${esc(selected)}" selected>${esc(selected)}</option>` : ""}
+        ${(items || []).map((e) => `<option value="${esc(e.entity_id)}" ${selected === e.entity_id ? "selected" : ""}>${esc(e.name)} (${esc(e.entity_id)}${e.platform ? ` · ${esc(e.platform)}` : ""})</option>`).join("")}`;
+    };
+    return `
+      <label class="full">${this.t("linked_entity")}<select data-action="linked">${options(list, d.linked_entity)}</select>
+        <small>${list && !list.length ? this.t("linked_none") : this.t("linked_help")}</small></label>
+      ${d.type === "fan" ? `<label class="full">${this.t("linked_light")}<select data-action="linked-light">${options(lights, d.linked_light_entity)}</select></label>` : ""}
+      <label class="check full"><input type="checkbox" data-action="mirror" ${d.mirror ? "checked" : ""}> ${this.t("mirror")}</label>
+      <div class="actions full"><button class="primary" data-action="linked-fill" ${d.linked_entity ? "" : "disabled"}>${this.t("linked_fill")}</button></div>`;
+  }
+
+  renderFollow(d) {
+    if (d.mirror && d.linked_entity) return ""; // the linked entity already knows the state
+    const tx = this.txInfo(d);
+    const problem = tx && !tx.can_listen ? tx.listen_problem : null;
+    let somfyList = "";
+    if (d.somfy && d.follow) {
+      const rows = (d.follow_somfy || []).map((a) => {
+        const hex = Number(a).toString(16).toUpperCase().padStart(6, "0");
+        return `<div class="bl-row"><span class="mono">${hex}</span><button data-action="unfollow-somfy" data-address="${a}">${this.t("remove_short")}</button></div>`;
+      }).join("");
+      somfyList = `<div class="full"><b>${this.t("follow_somfy")}</b>${rows || `<p class="sub">${this.t("follow_somfy_none")}</p>`}
+        <div class="actions"><button data-action="somfy-detect" ${problem ? "disabled" : ""}>${this.t("follow_somfy_detect")}</button></div></div>`;
+    }
+    return `<label class="check full"><input type="checkbox" data-action="follow" ${d.follow ? "checked" : ""}> ${this.t("follow")}</label>
+      <small class="full">${this.t("follow_help")}</small>
+      ${d.follow && problem ? `<p class="warn-text full">${esc(this.t("follow_problem", { msg: problem }))}</p>` : ""}
+      ${somfyList}`;
   }
 
   // ---------- rendering ----------
@@ -1371,6 +1875,7 @@ class RFDevicesPanel extends HTMLElement {
   }
 
   relayMode(d) {
+    if (d.type === "cover") return "none"; // a cover has its own, simpler relay options
     return d.options.relay_mode || (d.options.power_entity ? "coupled" : "none");
   }
 
@@ -1399,7 +1904,137 @@ class RFDevicesPanel extends HTMLElement {
     </svg>`;
   }
 
+  /** Covers: what is wired, chosen by the user or read from the saved options. */
+  coverWiring(d) {
+    const w = this._state.coverWiring;
+    if (w && w.id === d.id) return w.value;
+    const o = d.options;
+    const wall = o.switch_entity || o.switch_close_entity;
+    return o.power_entity ? (wall ? "relay_wall" : "relay") : wall ? "wall" : "none";
+  }
+
+  /** Covers: a relay feeding the motor and wall buttons, each on its own; a meter. */
+  renderCoverRelay(d) {
+    const o = d.options;
+    const wiring = this.coverWiring(d);
+    const relay = wiring.startsWith("relay");
+    const wall = wiring.endsWith("wall");
+    const isMeter = (e, st) =>
+      /^(binary_sensor|input_boolean)\./.test(e) || (/^sensor\./.test(e) && st.attributes.unit_of_measurement === "W");
+    const isInput = (e) => /^(binary_sensor|input_boolean|switch)\./.test(e);
+    const numeric = o.state_entity && o.state_entity.startsWith("sensor.");
+    const opt = (v) => `<option value="${v}" ${wiring === v ? "selected" : ""}>${this.t("cover_wiring_" + v)}</option>`;
+    return `<div class="form">
+      <label class="full">${this.t("cover_wiring_q")}
+        <select data-cover-wiring="1">${["none", "wall", "relay", "relay_wall"].map(opt).join("")}</select>
+        <small>${this.t("cover_relay_intro")}</small></label>
+      ${relay
+        ? `${this.entitySelect("power_entity", this.t("relay_entity"), (e) => /^(switch|light)\./.test(e), this.t("cover_relay_help"))}
+           ${o.power_entity
+             ? `<label class="check full"><input type="checkbox" data-opt="power_on_allowed" data-rerender="1" ${(o.power_on_allowed ?? true) ? "checked" : ""}> ${this.t("cover_power_on")}</label>
+                ${(o.power_on_allowed ?? true)
+                  ? `<label>${this.t("power_up_delay")}<input class="dec" type="text" inputmode="decimal" data-min="0" data-max="15" data-opt="power_up_delay" value="${this.fmt(o.power_up_delay ?? 1)}"><small>${this.t("cover_power_up_delay_help")}</small></label>`
+                  : ""}`
+             : ""}`
+        : ""}
+      ${wall
+        ? `<label>${this.t("cover_wall_type")}<select data-opt="wall_type" data-rerender="1">
+             <option value="momentary" ${(o.wall_type || "momentary") === "momentary" ? "selected" : ""}>${this.t("cover_wall_momentary")}</option>
+             <option value="maintained" ${o.wall_type === "maintained" ? "selected" : ""}>${this.t("cover_wall_maintained")}</option></select></label>
+           ${this.entitySelect("switch_entity", this.t(o.switch_close_entity ? "cover_wall_up" : "cover_wall_one"), isInput)}
+           ${this.entitySelect("switch_close_entity", this.t("cover_wall_down"), isInput)}
+           <small class="full">${this.t(o.switch_close_entity
+             ? (o.wall_type === "maintained" ? "cover_wall_two_maintained_help" : "cover_wall_two_help")
+             : (o.wall_type === "maintained" ? "cover_wall_one_maintained_help" : "cover_wall_one_help"))}</small>`
+        : ""}
+      <h3 class="full">${this.t("meter_entity")}</h3>
+      ${this.entitySelect("state_entity", this.t("meter_entity"), isMeter, this.t("cover_meter_help"))}
+      ${numeric ? `<label>${this.t("cover_threshold")}<input class="dec" type="text" inputmode="decimal" data-min="0" data-opt="state_threshold" value="${this.fmt(o.state_threshold ?? 3)}"></label>` : ""}
+    </div>`;
+  }
+
+  setCoverWiring(value) {
+    const d = this._state.draft;
+    this._state.coverWiring = { id: d.id, value };
+    if (!value.startsWith("relay")) d.options.power_entity = null;
+    if (!value.endsWith("wall")) d.options.switch_entity = d.options.switch_close_entity = null;
+    this.dirty();
+    this.render();
+  }
+
+  // ---------- covers: timing a full travel ----------
+  coverEntity(d) {
+    const saved = this._state.devices.find((x) => x.id === d.id);
+    return (saved?.entities || []).find((e) => e.startsWith("cover."));
+  }
+
+  renderMeasure(d) {
+    const m = this._state.measure;
+    if (m) {
+      return `<div class="full measure"><b>${this.t(m.dir === "open" ? "measure_opening" : "measure_closing")}</b>
+        <span id="measure-clock" class="clock">0.0 s</span>
+        <div class="actions"><button class="primary" data-action="measure-stop">■ ${this.t("measure_arrived")}</button>
+        <button data-action="measure-cancel">${this.t("measure_cancel")}</button></div>
+        <small>${this.t(d.options.state_entity ? "measure_running_meter" : "measure_running")}</small></div>`;
+    }
+    if (!this.coverEntity(d) || !d.commands.open || !d.commands.close) {
+      return `<small class="full">⏱ ${this.t("measure_save_first")}</small>`;
+    }
+    return `<div class="full measure"><b>⏱ ${this.t("measure_title")}</b>
+      <div class="actions"><button data-action="measure" data-dir="open">▲ ${this.t("measure_open")}</button>
+      <button data-action="measure" data-dir="close">▼ ${this.t("measure_close")}</button></div>
+      <small>${this.t("measure_help")}</small></div>`;
+  }
+
+  async startMeasure(dir) {
+    const d = this._state.draft;
+    const eid = this.coverEntity(d);
+    if (!eid || this._state.measure) return;
+    try {
+      await this._hass.callService("cover", dir === "open" ? "open_cover" : "close_cover", { entity_id: eid });
+    } catch (e) {
+      return this.toast(e.message, true);
+    }
+    const m = (this._state.measure = { dir, eid, id: d.id, start: performance.now(), seen: false, last: 0 });
+    this.render();
+    m.timer = setInterval(() => {
+      const now = performance.now();
+      const clock = this.shadowRoot.getElementById("measure-clock");
+      if (clock) clock.textContent = `${((now - m.start) / 1000).toFixed(1)} s`;
+      // With a meter the motor itself says when it arrived.
+      const o = this._state.draft?.options || {};
+      const st = o.state_entity && this._hass.states[o.state_entity];
+      if (!st) return;
+      const running = st.state === "on" || Number(st.state) > (o.state_threshold ?? 3);
+      if (running) Object.assign(m, { seen: true, last: now });
+      else if (m.seen && now - m.last > 1500) this.stopMeasure(true, (m.last - m.start) / 1000);
+    }, 100);
+  }
+
+  async stopMeasure(keep, seconds = null) {
+    const m = this._state.measure;
+    if (!m) return;
+    clearInterval(m.timer);
+    this._state.measure = null;
+    const d = this._state.draft;
+    try {
+      if (!keep) {
+        if (d?.commands.stop) await this._hass.callService("cover", "stop_cover", { entity_id: m.eid });
+      } else if (d && d.id === m.id) {
+        const elapsed = seconds ?? (performance.now() - m.start) / 1000;
+        d.options[m.dir === "open" ? "open_time" : "close_time"] = Math.min(300, Math.max(0.1, Math.round(elapsed * 10) / 10));
+        // It is at the end of its travel now, whatever the old times said.
+        await this._hass.callService("rf_devices", "set_position_state", { entity_id: m.eid, position: m.dir === "open" ? 100 : 0 });
+        this.dirty();
+      }
+    } catch (e) {
+      this.toast(e.message, true);
+    }
+    this.render();
+  }
+
   renderRelay(d) {
+    if (d.type === "cover") return this.renderCoverRelay(d);
     const o = d.options;
     const on = this.relayOn(d);
     const mode = this.relayMode(d);
@@ -1571,7 +2206,8 @@ class RFDevicesPanel extends HTMLElement {
         <label>${this.t("close_time")}<input class="dec" type="text" inputmode="decimal" data-min="0" data-max="300" data-opt="close_time" value="${this.fmt(o.close_time ?? 0)}"></label>
         <label>${this.t("device_class")}<select data-opt="device_class">
           ${COVER_CLASSES.map((c) => `<option ${o.device_class === c ? "selected" : ""}>${c}</option>`).join("")}</select></label>
-        <small class="full">${this.t("times_help")}</small>`;
+        <small class="full">${this.t("times_help")}</small>
+        ${this.renderMeasure(d)}`;
     } else if (d.type === "fan") {
       extra = `
         <label>${this.t("fan_power")}${sel("power", [["off", this.t("power_off_button")], ["toggle", this.t("power_toggle")]])}</label>
@@ -1601,7 +2237,8 @@ class RFDevicesPanel extends HTMLElement {
       <label>${this.t("command_interval")}<input class="dec" type="text" inputmode="decimal" data-min="0" data-max="5" data-field-num="command_interval"
         value="${this.fmt(d.command_interval ?? "")}" placeholder="${this.fmt(info.min_interval ?? 0.4)}">
         <small>${this.t("command_interval_help", { g: info.min_interval ?? 0.4 })}</small></label>
-    </div>`;
+    </div>
+    ${this.renderControl(d)}`;
   }
 
   renderLightTab(d) {
@@ -1648,6 +2285,7 @@ class RFDevicesPanel extends HTMLElement {
     const t = [["general", "⚙", "tab_general"], ["buttons", "🎛", "tab_buttons"]];
     if (this.hasLight(d)) t.push(["light", "💡", "tab_light"]);
     if (["light", "switch", "fan"].includes(d.type)) t.push(["relay", "🔌", "tab_relay"], ["power", "⚡", "tab_power"]);
+    if (d.type === "cover") t.push(["relay", "🔌", "tab_relay"]);
     t.push(["live", "▶", "tab_live"]);
     return t;
   }
@@ -1776,17 +2414,19 @@ class RFDevicesPanel extends HTMLElement {
     return slots
       .map(({ role, required }) => {
         const c = d.commands[role];
-        const has = c && c.code;
-        const a = has ? c.analysis : null;
+        const has = hasCode(c);
+        const kind = has ? c.kind || "rf" : null;
+        const a = kind === "rf" ? c.analysis : null;
         const dup = has && c.fingerprint ? byFp[c.fingerprint].filter((r) => r !== role) : [];
         const warnings = [];
         if (a?.needs_cleaning) warnings.push(this.t("needs_cleaning", { frames: a.frames, times: this.times(a.repeat), ms: a.sent_ms }));
         if (dup.length) warnings.push(this.t("duplicate", { other: dup.map((r) => this.roleLabel(r, d)).join(", ") }));
-        const info = has
-          ? [c.frequency ? this.t("frequency", { f: c.frequency }) : null, a ? `${a.kind.toUpperCase()} · ${this.t("frames_info", { good: a.good_frames, ms: a.sent_ms })}` : null]
+        const info = !has ? this.t("not_learned")
+          : kind === "somfy" ? this.t("kind_somfy", { b: this.t("b_" + c.button) })
+          : kind === "action" ? this.t("kind_action", { svc: `${c.service}${c.entity_id ? ` → ${c.entity_id}` : ""}${Object.keys(c.data || {}).length ? ` ${JSON.stringify(c.data)}` : ""}` })
+          : [c.frequency ? this.t("frequency", { f: c.frequency }) : null, a ? `${a.kind.toUpperCase()} · ${this.t("frames_info", { good: a.good_frames, ms: a.sent_ms })}` : null]
               .filter(Boolean)
-              .join(" · ")
-          : this.t("not_learned");
+              .join(" · ");
         return `<div class="slot ${has ? "done" : required ? "todo" : "opt"}">
           <div class="slot-main">
             <div class="slot-name">${esc(this.roleLabel(role, d))}${required ? "" : ` <small>(${this.t("optional")})</small>`}</div>
@@ -1797,7 +2437,12 @@ class RFDevicesPanel extends HTMLElement {
           </div>
           ${a ? this.wave(a.sample_us, a.frame_map) : ""}
           <div class="slot-actions">
-            <button class="primary" data-action="learn" data-role="${role}">${this.t("learn")}</button>
+            ${kind === "somfy"
+              ? `<select data-action="somfy-btn" data-role="${role}" title="${esc(this.t("somfy_button"))}">${(this._state.info.somfy_buttons || []).map((b) =>
+                  `<option value="${b}" ${c.button === b ? "selected" : ""}>${esc(this.t("b_" + b))}</option>`).join("")}</select>`
+              : kind === "action"
+                ? `<button class="primary" data-action="edit-action" data-role="${role}">${this.t("edit")}</button>`
+                : `<button class="primary" data-action="learn" data-role="${role}">${this.t("learn")}</button>`}
             ${has ? `<button data-action="test" data-role="${role}">${this.t("test")}</button>` : ""}
             ${has && a && a.kind !== "ir" && a.good_frames >= 1
               ? `<label class="frames" title="${esc(this.t("frames_help"))}">${this.t("frames_label")}
@@ -1809,8 +2454,10 @@ class RFDevicesPanel extends HTMLElement {
               <option value="paste">${this.t("paste")}</option>
               <option value="device">${this.t("from_device")}</option>
               <option value="broadlink">${this.t("from_broadlink")}</option>
-              ${has ? `<option value="copy">${this.t("copy_code")}</option>` : ""}
-              ${has ? `<option value="clean">${this.t("clean")}</option>` : ""}
+              <option value="action">${this.t("more_action")}</option>
+              ${d.somfy ? `<option value="somfy">${this.t("more_somfy")}</option>` : ""}
+              ${kind === "rf" ? `<option value="copy">${this.t("copy_code")}</option>` : ""}
+              ${kind === "rf" ? `<option value="clean">${this.t("clean")}</option>` : ""}
               ${has || role.startsWith("x_") ? `<option value="remove">${this.t("remove")}</option>` : ""}
             </select>
           </div></div>`;
@@ -1876,13 +2523,19 @@ class RFDevicesPanel extends HTMLElement {
     let body = "";
     let title = "";
     if (dlg.kind === "learn") {
-      title = this.t("learn_title", { role });
+      title = dlg.somfyDetect ? this.t("follow_somfy_title") : this.t("learn_title", { role });
       const tx = this._state.info.transmitters.find((t) => t.entity_id === dlg.tx);
       const sweeps = tx?.sweeps ?? true;
       if (tx && !tx.can_learn) body = `<p class="warn-text">${esc(this.t("no_learn", { msg: tx.learn_problem || "" }))}</p>`;
       else if (dlg.stage === "idle") {
         body = `<p class="sub">${this.t(sweeps ? "capture_tip" : "capture_tip_rx")}</p>${dlg.knownFreq ? `<label class="check"><input type="checkbox" id="use-known" ${dlg.useKnown ? "checked" : ""}> ${this.t("known_freq", { f: dlg.knownFreq })}</label>` : ""}
           <div class="actions"><span class="spacer"></span><button class="primary" data-action="start-learn">${this.t("start")}</button></div>`;
+      } else if (dlg.stage === "captured" && dlg.somfyDetect) {
+        const found = new Map((dlg.somfy || []).map((p) => [p.address, p]));
+        body = !dlg.somfy ? `<div class="stage busy"><div class="pulse"></div></div>`
+          : found.size ? [...found.values()].map((p) => `<div class="bl-row"><span>${esc(this.t("follow_somfy_found", { hex: p.hex, b: this.t("b_" + p.button), c: p.rolling_code }))}</span>
+              <button class="primary" data-action="follow-somfy" data-address="${p.address}">${this.t("follow_somfy_add")}</button></div>`).join("")
+          : `<p class="warn-text">${this.t("follow_somfy_nothing")}</p><div class="actions"><span class="spacer"></span><button data-action="start-learn">${this.t("retry")}</button></div>`;
       } else if (dlg.stage === "captured") {
         body = this.renderResult(dlg.result, true, true);
       } else {
@@ -1894,6 +2547,23 @@ class RFDevicesPanel extends HTMLElement {
             <p>${esc(this.t(key, { role, f: dlg.frequency ?? "", msg: dlg.message ?? "" }))}</p></div>
           ${busy ? "" : `<div class="actions"><span class="spacer"></span><button class="primary" data-action="start-learn">${this.t("retry")}</button></div>`}`;
       }
+    } else if (dlg.kind === "action") {
+      title = this.t("action_title", { role });
+      const all = Object.keys(this._hass.states).sort();
+      const dom = dlg.entity_id ? dlg.entity_id.split(".")[0] : null;
+      const suggestions = [...new Set([...(SERVICES[dom] || []), ...Object.values(SERVICES).flat()])];
+      body = `<div class="form">
+          <label class="full">${this.t("action_service")}<input id="action-service" list="action-services" value="${esc(dlg.service)}" placeholder="cover.open_cover">
+            <datalist id="action-services">${suggestions.map((x) => `<option value="${x}">`).join("")}</datalist></label>
+          <label class="full">${this.t("action_entity")}<select id="action-entity"><option value="">${this.t("none")}</option>
+            ${dlg.entity_id && !this._hass.states[dlg.entity_id] ? `<option value="${esc(dlg.entity_id)}" selected>${esc(dlg.entity_id)}</option>` : ""}
+            ${all.map((e) => `<option value="${e}" ${dlg.entity_id === e ? "selected" : ""}>${esc(this._hass.states[e].attributes.friendly_name || e)} (${e})</option>`).join("")}</select></label>
+          <label class="full">${this.t("action_data")}<textarea id="action-data" rows="3" placeholder='{"percentage": 50}'>${esc(dlg.data)}</textarea></label>
+          <small class="full">${this.t("action_help")}</small>
+        </div>
+        ${dlg.message ? `<p class="warn-text">${esc(dlg.message)}</p>` : ""}
+        <div class="actions"><button data-action="action-test">${this.t("test")}</button><span class="spacer"></span>
+          <button class="primary" data-action="action-save">${this.t("use")}</button></div>`;
     } else if (dlg.kind === "paste") {
       title = `${this.t("paste_title")} — ${role}`;
       body = `<textarea id="paste-code" rows="4" placeholder="JgBQAAABKJIUEhQ…">${esc(dlg.result?.raw || "")}</textarea>
@@ -2074,6 +2744,9 @@ class RFDevicesPanel extends HTMLElement {
         }
       })
     );
+    root.querySelectorAll("[data-cover-wiring]").forEach((el) =>
+      el.addEventListener("change", () => this.setCoverWiring(el.value))
+    );
     root.querySelectorAll("[data-has-light]").forEach((el) =>
       el.addEventListener("change", () => {
         const o = this._state.draft.options;
@@ -2111,6 +2784,14 @@ class RFDevicesPanel extends HTMLElement {
         this.render();
       })
     );
+    root.querySelectorAll("[data-somfy]").forEach((el) =>
+      el.addEventListener("change", () => {
+        const d = this._state.draft;
+        const key = el.dataset.somfy;
+        d.somfy = { ...d.somfy, [key]: el.type === "checkbox" ? el.checked : Math.max(0, Math.min(20, Number(el.value) || 0)) };
+        this.dirty();
+      })
+    );
     root.querySelectorAll("[data-hold]").forEach((el) =>
       el.addEventListener("change", () => {
         this._state.draft.commands[el.dataset.hold].hold = this.num(el) ?? 0;
@@ -2136,10 +2817,14 @@ class RFDevicesPanel extends HTMLElement {
       case "export": return this.exportAll();
       case "debug-report": return this.downloadDebug();
       case "import": return this.shadowRoot.getElementById("import-file").click();
+      case "measure": return this.startMeasure(el.dataset.dir);
+      case "measure-stop": return this.stopMeasure(true);
+      case "measure-cancel": return this.stopMeasure(false);
       case "tab":
         this._state.tab = el.dataset.tab;
         return this.render();
       case "back":
+        this.stopMeasure(false);
         if (this._state.saveStatus === "dirty") this.persist();
         this._state.view = "list";
         this._state.draft = null;
@@ -2147,7 +2832,50 @@ class RFDevicesPanel extends HTMLElement {
       case "save": return this.saveDraft();
       case "type": return this.setType(el.value);
       case "learn": return this.openLearn(role);
-      case "test": return this.send(this._state.draft.commands[role].code);
+      case "test": return this.testRole(role);
+      case "control": return this.setControl(el.value);
+      case "somfy-pair": return this.pairSomfy();
+      case "somfy-new": return this.newSomfyAddress();
+      case "somfy-fill":
+        this.fillSomfy(true);
+        this.dirty();
+        return this.render();
+      case "somfy-btn": return this.setSomfyButton(role, el.value);
+      case "somfy-detect": return this.openSomfyDetect();
+      case "follow-somfy": return this.addFollowSomfy(el.dataset.address);
+      case "unfollow-somfy": {
+        const d = this._state.draft;
+        d.follow_somfy = (d.follow_somfy || []).filter((a) => String(a) !== el.dataset.address);
+        this.dirty();
+        return this.render();
+      }
+      case "follow":
+        this._state.draft.follow = el.checked;
+        this.dirty();
+        return this.render();
+      case "mirror":
+        this._state.draft.mirror = el.checked;
+        this.dirty();
+        return this.render();
+      case "linked":
+      case "linked-light": {
+        const d = this._state.draft;
+        d[action === "linked" ? "linked_entity" : "linked_light_entity"] = el.value || null;
+        if (action === "linked" && el.value && !Object.values(d.commands).some(hasCode)) this.fillLinked();
+        this.dirty();
+        return this.render();
+      }
+      case "linked-fill":
+        this.fillLinked();
+        this.dirty();
+        return this.render();
+      case "edit-action": return this.openAction(role);
+      case "action-test": {
+        const cmd = this.readAction();
+        if (cmd) this.sendCommand(cmd);
+        return;
+      }
+      case "action-save": return this.saveAction();
       case "add-extra": return this.addExtra();
       case "more": {
         const v = el.value;
@@ -2156,6 +2884,8 @@ class RFDevicesPanel extends HTMLElement {
           this._state.dialog = { kind: "paste", role, result: null };
           this.render();
         } else if (v === "broadlink") this.openBroadlink(role);
+        else if (v === "action") this.openAction(role);
+        else if (v === "somfy") this.setSomfyButton(role, SOMFY_DEFAULT[role] || "my");
         else if (v === "device") this.openDevices(role);
         else if (v === "copy") this.showCode(role);
         else if (v === "clean") this.cleanRole(role);
@@ -2269,6 +2999,9 @@ section h2, .dialog h2 { font-size:17px; font-weight:500; margin:0 0 12px; }
 .blk { flex:1; height:5px; border-radius:2px; max-width:18px; }
 .blk.ok { background:var(--success-color, #43a047); } .blk.bad { background:var(--error-color, #db4437); }
 .calblock { grid-column:1/-1; }
+.form.ctl { margin-top:20px; padding-top:12px; border-top:1px solid var(--divider-color); }
+.form.ctl h3 { margin:0; font-size:16px; font-weight:500; color:var(--primary-text-color); }
+.form .actions.full { grid-column:1/-1; }
 .edit-head { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
 .edit-title { font-size:20px; font-weight:500; display:flex; align-items:center; gap:8px; }
 .save-status { font-size:13px; padding:4px 10px; border-radius:12px; color:var(--secondary-text-color); }
@@ -2295,6 +3028,8 @@ button.link { background:none; border:1px solid var(--divider-color); color:var(
 .lrow { display:flex; flex-direction:column; font-size:12px; color:var(--secondary-text-color); margin-top:8px; }
 .lrow input[type=range] { width:100%; }
 .chipbtn { padding:4px 10px; font-size:13px; }
+.measure { border:1px solid var(--divider-color); border-radius:8px; padding:12px; }
+.measure .clock { font-size:28px; font-variant-numeric:tabular-nums; margin-left:12px; }
 .chipbtn.sync { border-style:dashed; }
 .badge { font-size:11px; color:var(--success-color, #43a047); white-space:nowrap; }
 .synccheck { font-size:12px; margin:8px 0 0; color:var(--secondary-text-color); }

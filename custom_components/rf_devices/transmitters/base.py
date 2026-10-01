@@ -10,6 +10,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
+from .. import codec
+
 if TYPE_CHECKING:
     from ..hub import RFHub
 
@@ -49,6 +51,22 @@ class Transmitter:
 
     async def async_send(self, code: str) -> None:
         raise NotImplementedError
+
+    async def async_send_timings(self, timings: list[int], frequency_hz: int, repeat: int = 0) -> None:
+        """Send raw signed microseconds (+on / −off) built by a protocol (Somfy…).
+
+        By default they become a Broadlink-style packet sent with
+        ``async_send``; a fixed-frequency transmitter then uses its own carrier.
+        """
+        await self.async_send(codec.from_timings([timings], codec.kind_for_frequency(frequency_hz), repeat))
+
+    def carrier_note(self, frequency_hz: int) -> str | None:
+        """Why this transmitter may not reach ``frequency_hz`` well, or None."""
+        return None
+
+    def receiver_problem(self) -> str | None:
+        """Why this transmitter's device cannot listen continuously, or None if it can."""
+        return "This transmitter has no RF receiver to listen to the original remote"
 
     def learn_problem(self) -> str | None:
         """Why this transmitter cannot learn right now, or None if it can."""
