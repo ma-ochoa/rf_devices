@@ -51,6 +51,7 @@ from .transmitters.radio_frequency import (
     ReceiversUnknown,
     async_refresh_receivers,
     esphome_receivers,
+    has_frame,
     listed_receivers,
     receiver_frequency,
     select_bursts,
@@ -379,7 +380,7 @@ class _EsphomeLink:
         if event.key not in self._receivers:
             return  # an infrared receiver, or another radio's entity
         timings = list(event.timings)
-        if sum(1 for v in timings if v) < codec.MIN_RECEIVED_PULSES:
+        if not has_frame(timings):
             return  # noise
         self._on_burst(self.entry_id, event.key, self._receivers[event.key], timings)
 

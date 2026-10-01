@@ -298,7 +298,7 @@ async def test_debug_report(hass: HomeAssistant, rf, hass_ws_client, monkeypatch
     for kind in ("rf_send", "send", "learn_start", "rx_receivers", "rx", "learn_press", "learn_captured"):
         assert kind in kinds, kind
     rx = [e for e in report["trace"] if e["kind"] == "rx"]
-    assert rx[0]["ignored"] == "too short (noise)"
+    assert rx[0]["ignored"] == "no frame (noise)"
     assert sum(e["ignored"] is None for e in rx) == 10  # the cut first frame is too short too
     captured = next(e for e in report["trace"] if e["kind"] == "learn_captured")
     assert captured["fingerprint"] == codec.fingerprint(capture(BITS_B))
@@ -361,3 +361,31 @@ async def test_receivers_come_from_the_device_not_from_home_assistant(hass: Home
     await async_refresh_receivers(hass, rf.esphome.entry_id)
     _, receivers = esphome_receivers(hass, rf.esphome.entry_id)
     assert set(receivers) == {2}
+
+
+async def test_noise_is_not_captured(hass: HomeAssistant, rf, hass_ws_client, monkeypatch) -> None:
+    """A simple 433 MHz receiver delivers noise too; only a frame that repeats is a remote."""
+    from custom_components.rf_devices.transmitters.radio_frequency import has_frame, repeated_frames
+
+    # Reported by a user: stray pulses with long silences between them (many "2-bit frames").
+    sparse = [310, -8200, 290, -610, 280, -7900] * 8
+    assert len(sparse) >= codec.MIN_RECEIVED_PULSES and not has_frame(sparse)
+    # Dense but random: frame-like once, never the same twice.
+    lone = [300, -900, 900, -300] * 6 + [300, -300] * 5 + [300]
+    assert has_frame(lone) and repeated_frames([lone]) < 2
+
+    monkeypatch.setattr(rf_tx, "QUIET_AFTER_PRESS", 0.2)
+    ws = await hass_ws_client(hass)
+    await ws.send_json_auto_id({"type": "rf_devices/learn"})
+    assert (await ws.receive_json())["success"]
+    assert (await ws.receive_json(timeout=10))["event"]["stage"] == "press"
+    rf.client.emit(2, sparse)
+    rf.client.emit(2, lone)
+    await asyncio.sleep(0.5)  # the lone frame is weighed and dropped; still waiting
+    held = capture(BITS_A, frames=6)
+    for burst in _esphome_bursts(held):
+        rf.client.emit(2, burst)
+    stages, ev = await _stages(ws)
+    assert stages == ["captured"], ev
+    assert ev["fingerprint"] == codec.fingerprint(held)
+    assert ev["raw_analysis"]["bad_frames"] == 0

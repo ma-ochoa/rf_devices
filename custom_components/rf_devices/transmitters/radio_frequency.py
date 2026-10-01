@@ -42,6 +42,8 @@ QUIET_AFTER_PRESS = 0.6
 MAX_PRESS = 3.0
 # Bursts whose length differs from the most common one by more than this are noise.
 LENGTH_TOLERANCE = 0.1
+# A capture needs the same frame at least this many times: a remote repeats it, noise does not.
+MIN_REPEATS = 2
 
 
 def fit_carrier(wanted: int, ranges: list[tuple[int, int]]) -> int:
@@ -73,14 +75,52 @@ def carrier_for(packet: codec.Packet, ranges: list[tuple[int, int]]) -> int:
     return fit_carrier(DEFAULT_FREQUENCY[packet.type], ranges)
 
 
+def frames_in(burst: list[int]) -> list[list[int]]:
+    """Split what a receiver delivered at its long silences (each frame keeps its pause)."""
+    frames: list[list[int]] = []
+    current: list[int] = []
+    for value in burst:
+        if not value:
+            continue
+        current.append(value)
+        if value < 0 and -value >= codec.MIN_GAP_US:
+            frames.append(current)
+            current = []
+    if current:
+        frames.append(current)
+    return frames
+
+
+def _pulses(frame: list[int]) -> int:
+    """Pulses of a frame, not counting the silence that closes it."""
+    return len(frame) - (1 if frame and frame[-1] < 0 and -frame[-1] >= codec.MIN_GAP_US else 0)
+
+
+def has_frame(burst: list[int]) -> bool:
+    """Whether a burst holds something frame-like (a simple receiver also delivers noise:
+    a few stray pulses with long silences between them)."""
+    return any(_pulses(f) >= codec.MIN_RECEIVED_PULSES for f in frames_in(burst))
+
+
 def select_bursts(bursts: list[list[int]]) -> list[list[int]]:
-    """Keep the bursts that look like the remote: long enough and of the usual length."""
-    long_enough = [b for b in bursts if sum(1 for v in b if v) >= codec.MIN_RECEIVED_PULSES]
-    if not long_enough:
+    """The frames that look like the remote: long enough and of the usual length."""
+    frames = [f for b in bursts for f in frames_in(b) if _pulses(f) >= codec.MIN_RECEIVED_PULSES]
+    if not frames:
         return []
-    usual, _ = Counter(len(b) for b in long_enough).most_common(1)[0]
+    usual, _ = Counter(_pulses(f) for f in frames).most_common(1)[0]
     margin = max(2, round(usual * LENGTH_TOLERANCE))
-    return [b for b in long_enough if abs(len(b) - usual) <= margin]
+    return [f for f in frames if abs(_pulses(f) - usual) <= margin]
+
+
+def repeated_frames(bursts: list[list[int]]) -> int:
+    """How many identical frames the bursts hold. A remote repeats its frame; noise does not."""
+    kept = select_bursts(bursts)
+    if not kept:
+        return 0
+    try:
+        return codec.analyze(codec.from_timings(kept))["good_frames"]
+    except codec.CodecError:
+        return 0
 
 
 class RadioFrequencyTransmitter(Transmitter):
@@ -224,8 +264,8 @@ class RadioFrequencyTransmitter(Transmitter):
             ignored = None
             if event.key not in receivers:
                 ignored = "other receiver (IR?)"
-            elif sum(1 for v in timings if v) < codec.MIN_RECEIVED_PULSES:
-                ignored = "too short (noise)"
+            elif not has_frame(timings):
+                ignored = "no frame (noise)"
             debug.trace(
                 self.hass, "rx", key=event.key, pulses=len(timings), ignored=ignored,
                 timings=debug.clip(timings),
@@ -245,24 +285,32 @@ class RadioFrequencyTransmitter(Transmitter):
             return
         try:
             yield LearnEvent("press", {"frequency": frequency_mhz})
-            try:
-                await asyncio.wait_for(arrived.wait(), LEARN_TIMEOUT)
-            except TimeoutError:
-                yield LearnEvent("timeout", {"during": "press"})
-                return
+            deadline = time.monotonic() + LEARN_TIMEOUT
             while True:
-                now = time.monotonic()
-                if now - last >= QUIET_AFTER_PRESS or now - first >= MAX_PRESS:
+                arrived.clear()
+                try:
+                    await asyncio.wait_for(arrived.wait(), max(0.0, deadline - time.monotonic()))
+                except TimeoutError:
+                    debug.trace(self.hass, "rx_nothing_repeated", bursts=len(bursts))
+                    yield LearnEvent("timeout", {"during": "press"})
+                    return
+                while True:
+                    now = time.monotonic()
+                    if now - last >= QUIET_AFTER_PRESS or now - first >= MAX_PRESS:
+                        break
+                    await asyncio.sleep(0.1)
+                if repeated_frames(bursts) >= MIN_REPEATS:
                     break
-                await asyncio.sleep(0.1)
+                # Something frame-like, but it did not repeat: stray noise.
+                # Forget it and keep waiting for the remote.
+                debug.trace(self.hass, "rx_discarded", bursts=len(bursts))
+                bursts.clear()
+                first = None
         finally:
             unsubscribe()
 
         kept = select_bursts(bursts)
         _LOGGER.debug("Received %d bursts, kept %d: %s", len(bursts), len(kept), bursts)
-        if not kept:
-            yield LearnEvent("timeout", {"during": "press"})
-            return
         yield LearnEvent("captured", codec.capture_result(codec.from_timings(kept), frequency_mhz))
 
 

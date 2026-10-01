@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.0-labs.3 (test build, `labs` branch)
+
+- Fix: **a capture with an ESPHome receiver could take noise for the remote** (many "2-bit"
+  frames, most of them incomplete). A simple 433 MHz receiver also delivers stray pulses when
+  nothing is transmitting. Now only a run of pulses without long silences counts as a frame, and
+  a capture ends only when the same frame has been received at least twice, as a remote sends
+  it. Noise is dropped and the capture keeps waiting for the remote.
+- The *Diagnostics* trace marks the bursts dropped as noise and the captures discarded because
+  nothing repeated.
+
 ## 0.12.0-labs.2 (test build, `labs` branch)
 
 Everything in this build is untested on real hardware: it is meant for users who try it and send
