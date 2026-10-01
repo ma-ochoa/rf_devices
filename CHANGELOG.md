@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.9
+
+- Fixed: a blind/awning or a "buttons only" device could not be created or saved ("not a valid
+  option at 'take_relay_entity_id'"): saving added a relay option those types do not have.
+- Blinds and awnings: "Time the opening / closing" buttons in the editor. Pressing sends the
+  command and starts a stopwatch; press "It has arrived" at the end of the travel (with a meter it
+  stops by itself) and the time is stored. The times can still be fine-tuned by hand.
+- Blinds and awnings get a "Relay & wall" tab. Relay and wall buttons are independent (nothing,
+  wall buttons only, a relay, or both), plus an optional meter:
+  - a relay that powers the motor (switched on when needed, or commands refused while it is off);
+  - wall buttons: one input steps open → stop → close → stop; two inputs are "up" and "down".
+    Push buttons or a maintained switch / up-0-down rocker;
+  - a power meter (W) or an on/off "moving" entity: a full opening or closing ends when the motor
+    stops at its limit switch instead of when the time is up, which re-aligns 0 % and 100 %; the
+    `last_run_seconds` attribute gives the measured travel time, and `position_reliable` turns
+    false when the original remote moved the cover (until the next full travel).
+
 ## 0.11.8
 
 - Live calibration of the lamp: each time the lamp switches with the fan stopped, its real draw

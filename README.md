@@ -110,7 +110,7 @@ After installing, **RF Devices** appears in the sidebar (administrators only).
 |---|---|---|
 | **Light** | `light` (on/off, colour-temperature modes, brightness) | A single toggle button, or separate on/off; optional colour and brighter/dimmer buttons |
 | **Switch** | `switch` | Toggle or on/off |
-| **Cover** | `cover` with estimated position | Open, close, stop; travel times for positioning |
+| **Cover** | `cover` with estimated position | Open, close, stop; travel times (timed from the panel) for positioning; optional relay, wall buttons and power meter |
 | **Fan** | `fan` + optional `light` | Power (toggle) or off button, 1–10 speeds, direction (one reversing button, or summer/winter), presets such as *Breeze*, timers, optional lamp with its own buttons |
 | **Buttons** | `button` per remote button | Any |
 

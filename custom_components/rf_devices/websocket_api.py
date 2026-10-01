@@ -542,7 +542,9 @@ def relay_switch_name(name: str, prefix: str) -> str:
     return f"{prefix} {name[:1].lower()}{name[1:]}".strip()
 
 
-SOURCE_OPTIONS = ("power_entity", "switch_entity", "state_entity", "light_state_entity")
+SOURCE_OPTIONS = (
+    "power_entity", "switch_entity", "switch_close_entity", "state_entity", "light_state_entity"
+)
 
 
 def _refuse_own_sources(hass: HomeAssistant, device: dict) -> None:
@@ -564,7 +566,9 @@ async def apply_relay_identity(hass: HomeAssistant, hub: RFHub, old: dict | None
     The entity id can only be taken together with the name: unticking the
     name gives both back.
     """
-    if not new["options"].get("take_relay_name"):
+    if not new["options"].get("take_relay_name") and "take_relay_entity_id" in new["options"]:
+        # Only where the option exists: a cover or a button set has none, and
+        # adding it made their options invalid (they could not be saved).
         new["options"]["take_relay_entity_id"] = False
     was_id = bool(old and old["options"].get("take_relay_entity_id"))
     if was_id and not new["options"].get("take_relay_entity_id"):

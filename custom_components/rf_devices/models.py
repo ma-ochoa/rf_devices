@@ -216,6 +216,22 @@ _POWER = {
     vol.Optional("idle_off_to", default="08:00"): _HHMM,
 }
 
+# Covers: powering the motor moves nothing, so the relay may be switched on to
+# send a command. The meter (W, or an on/off "moving" entity) tells when the
+# motor really runs. Wall buttons are independent of the relay: one input steps
+# open → stop → close → stop; with a second one the first opens and it closes.
+# "momentary": push buttons, a press acts; "maintained": a switch or an
+# up/0/down rocker, every change acts (two inputs: back to 0 stops).
+_COVER_POWER = {
+    vol.Optional("power_entity", default=None): _ENTITY_ID,
+    vol.Optional("power_on_allowed", default=True): bool,
+    vol.Optional("power_up_delay", default=1.0): vol.All(vol.Coerce(float), vol.Range(0, 15)),
+    **_FEEDBACK,
+    vol.Optional("switch_entity", default=None): _ENTITY_ID,
+    vol.Optional("switch_close_entity", default=None): _ENTITY_ID,
+    vol.Optional("wall_type", default="momentary"): vol.In(["momentary", "maintained"]),
+}
+
 OPTION_SCHEMAS = {
     TYPE_LIGHT: vol.Schema(
         {
@@ -242,6 +258,7 @@ OPTION_SCHEMAS = {
             vol.Optional("device_class", default="shutter"): vol.In(
                 ["shutter", "blind", "curtain", "awning", "garage", "gate", "shade"]
             ),
+            **_COVER_POWER,
         }
     ),
     TYPE_FAN: vol.Schema(

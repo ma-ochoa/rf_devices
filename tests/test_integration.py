@@ -432,3 +432,120 @@ async def test_learn_tolerates_a_busy_broadlink(hass: HomeAssistant, setup, hass
     assert (await ws.receive_json())["success"]
     stages, _ = await _stages(ws)
     assert stages == ["press", "captured"]
+
+
+@pytest.mark.parametrize("kind", ["cover", "buttons"])
+async def test_new_device_without_relay_options_can_be_saved(hass, setup, hass_ws_client, kind) -> None:
+    """Covers and button sets have no relay options; saving must not add any."""
+    ws = await hass_ws_client(hass)
+    commands = {"open": {"code": CODE_A}, "close": {"code": CODE_B}} if kind == "cover" else {}
+    device = {"name": "Nuevo", "type": kind, "options": {}, "commands": commands}
+    await ws.send_json_auto_id({"type": "rf_devices/device/save", "device": device})
+    msg = await ws.receive_json()
+    assert msg["success"], msg
+    assert "take_relay_entity_id" not in msg["result"]["options"]
+    await ws.send_json_auto_id({"type": "rf_devices/device/save", "device": msg["result"]})
+    assert (await ws.receive_json())["success"]  # and again, as the editor does
+
+
+async def _cover_with(hass, hass_storage, **options):
+    devices = {"blind": _devices()["blind"]}
+    devices["blind"]["options"].update(options)
+    hass_storage[DOMAIN] = {
+        "version": 1, "minor_version": 1, "key": DOMAIN,
+        "data": {"devices": devices, "frequencies": {}},
+    }
+    hass.states.async_set(TX, "on")
+    calls = async_mock_service(hass, "remote", "send_command")
+    entry = MockConfigEntry(domain=DOMAIN, data={"transmitter": TX}, options={"min_interval": 0})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return calls
+
+
+async def test_cover_full_travel_follows_the_motor(hass, hass_storage, monkeypatch) -> None:
+    """With a meter, closing ends when the motor stops, not when the time is up."""
+    from custom_components.rf_devices import cover as cover_mod
+
+    monkeypatch.setattr(cover_mod, "TICK", 0.05)
+    hass.states.async_set("sensor.motor", "0")
+    await _cover_with(hass, hass_storage, state_entity="sensor.motor", open_time=0.2, close_time=0.2)
+    await hass.services.async_call("cover", "close_cover", {"entity_id": "cover.persiana"}, blocking=True)
+    hass.states.async_set("sensor.motor", "120")
+    await asyncio.sleep(0.5)  # well past the 0.2 s: still running
+    state = hass.states.get("cover.persiana")
+    assert state.state == "closing" and state.attributes["current_position"] == 1
+    hass.states.async_set("sensor.motor", "0")
+    await asyncio.sleep(0.3)
+    await hass.async_block_till_done()
+    state = hass.states.get("cover.persiana")
+    assert state.state == "closed" and state.attributes["current_position"] == 0
+    assert state.attributes["position_reliable"] is True
+    assert 0.3 < state.attributes["last_run_seconds"] < 0.8
+    # The original remote moves it: which way cannot be known.
+    await asyncio.sleep(0.1)
+    monkeypatch.setattr(cover_mod, "OWN_WINDOW", 0)
+    hass.states.async_set("sensor.motor", "118")
+    await hass.async_block_till_done()
+    assert hass.states.get("cover.persiana").attributes["position_reliable"] is False
+
+
+async def test_cover_relay_and_wall_button(hass, hass_storage, monkeypatch) -> None:
+    hass.states.async_set("switch.motor", "off")
+    hass.states.async_set("binary_sensor.wall", "off")
+    relay_on = async_mock_service(hass, "homeassistant", "turn_on")
+    calls = await _cover_with(
+        hass, hass_storage, power_entity="switch.motor", power_up_delay=0, switch_entity="binary_sensor.wall",
+        wall_type="maintained", open_time=5, close_time=5,
+    )
+    assert not entry_relays(hass)  # the fan/light relay controller is not for covers
+    await hass.services.async_call("cover", "stop_cover", {"entity_id": "cover.persiana"}, blocking=True)
+    assert not calls  # no power: nothing to stop
+    hass.states.async_set("binary_sensor.wall", "on")  # open (100 %) -> close
+    await hass.async_block_till_done()
+    assert [c.data["entity_id"] for c in relay_on] == ["switch.motor"]
+    assert _sent(calls) == [f"b64:{CODE_B}"]
+    hass.states.async_set("switch.motor", "on")
+    hass.states.async_set("binary_sensor.wall", "off")  # moving -> stop
+    await hass.async_block_till_done()
+    assert _sent(calls) == [f"b64:{CODE_B}", f"b64:{CODE_A}"]
+    assert hass.states.get("cover.persiana").state == "open"
+    hass.states.async_set("binary_sensor.wall", "on")  # was closing -> open
+    await hass.async_block_till_done()
+    assert hass.states.get("cover.persiana").state == "opening"
+    hass.states.async_set("switch.motor", "off")  # power cut: it stops there
+    await hass.async_block_till_done()
+    await asyncio.sleep(0)
+    await hass.async_block_till_done()
+    assert hass.states.get("cover.persiana").state == "open"
+
+
+def entry_relays(hass):
+    return hass.config_entries.async_entries(DOMAIN)[0].runtime_data.relays
+
+
+async def test_cover_two_wall_push_buttons(hass, hass_storage) -> None:
+    """Up and down push buttons: a press moves, any press while moving stops; releases do nothing."""
+    up, down = "binary_sensor.up", "binary_sensor.down"
+    hass.states.async_set(up, "off")
+    hass.states.async_set(down, "off")
+    calls = await _cover_with(
+        hass, hass_storage, switch_entity=up, switch_close_entity=down, open_time=5, close_time=5
+    )
+
+    async def press(entity):
+        hass.states.async_set(entity, "on")
+        await hass.async_block_till_done()
+        hass.states.async_set(entity, "off")
+        await hass.async_block_till_done()
+
+    await press(down)
+    assert _sent(calls) == [f"b64:{CODE_B}"]
+    assert hass.states.get("cover.persiana").state == "closing"
+    await press(up)  # moving: stop
+    assert _sent(calls) == [f"b64:{CODE_B}", f"b64:{CODE_A}"]
+    assert hass.states.get("cover.persiana").state == "open"
+    await press(up)
+    assert hass.states.get("cover.persiana").state == "opening"
+    await hass.services.async_call("cover", "stop_cover", {"entity_id": "cover.persiana"}, blocking=True)

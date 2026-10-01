@@ -41,6 +41,38 @@ const I18N = {
     open_time: "Tiempo de subida (s)",
     close_time: "Tiempo de bajada (s)",
     times_help: "Con los dos tiempos se calcula la posición y se puede elegir un porcentaje (necesita el botón Parar).",
+    cover_wiring_q: "¿Tiene relé o botones de pared?",
+    cover_wiring_none: "Nada: solo el mando RF",
+    cover_wiring_wall: "Solo botones de pared",
+    cover_wiring_relay: "Un relé le da corriente",
+    cover_wiring_relay_wall: "Relé y botones de pared",
+    cover_relay_intro: "Todo es opcional. Sin nada de esto la persiana funciona por tiempo con el mando RF.",
+    cover_relay_help: "Relé (Shelly, enchufe…) que da corriente al motor. Con el relé apagado no se envía nada.",
+    cover_power_on: "Encender el relé cuando haga falta para mover la persiana",
+    cover_power_up_delay_help: "Tiempo que se deja al receptor del motor para arrancar antes de enviar la orden.",
+    cover_wall_type: "Tipo de botones",
+    cover_wall_momentary: "Pulsadores (vuelven solos)",
+    cover_wall_maintained: "Interruptor o conmutador subir/0/bajar (se queda puesto)",
+    cover_wall_one: "Entrada del botón",
+    cover_wall_up: "Entrada del botón de subir",
+    cover_wall_down: "Entrada del botón de bajar (opcional)",
+    cover_wall_one_help: "Un pulsador: cada pulsación da un paso: subir → parar → bajar → parar.",
+    cover_wall_one_maintained_help: "Un interruptor: cada cambio de posición da un paso: subir → parar → bajar → parar.",
+    cover_wall_two_help: "Dos pulsadores: uno sube y otro baja; cualquier pulsación mientras se mueve la para.",
+    cover_wall_two_maintained_help: "Conmutador subir/0/bajar: sube o baja mientras está puesto y se para al volver al centro.",
+    cover_meter_help: "Opcional. Un sensor de consumo (W) del motor, o una entidad encendido/apagado que diga si se mueve. En una subida o bajada completa, la persiana se da por llegada cuando el motor se para en su final de carrera, no cuando pasa el tiempo: así 0 % y 100 % se corrigen solos. Si se mueve con el mando original, el atributo position_reliable pasa a false hasta el siguiente recorrido completo.",
+    cover_threshold: "El motor está en marcha por encima de (W)",
+    measure_title: "Cronometrar el recorrido",
+    measure_open: "Cronometrar subida",
+    measure_close: "Cronometrar bajada",
+    measure_help: "Para la subida, deja antes la persiana bajada del todo (y al revés para la bajada). Al pulsar se envía la orden y empieza a contar; pulsa «Ha llegado» cuando termine el recorrido. El tiempo se guarda arriba y puedes retocarlo a mano para el ajuste fino.",
+    measure_save_first: "Guarda el dispositivo con los botones Subir y Bajar aprendidos para poder cronometrar el recorrido.",
+    measure_opening: "Subiendo…",
+    measure_closing: "Bajando…",
+    measure_arrived: "Ha llegado",
+    measure_cancel: "Cancelar",
+    measure_running: "Pulsa «Ha llegado» en el momento en que la persiana termine el recorrido.",
+    measure_running_meter: "Se parará solo cuando el medidor vea que el motor se detiene; también puedes pulsar «Ha llegado».",
     device_class: "Clase",
     speeds: "Velocidades",
     fan_light: "Luz del ventilador",
@@ -350,6 +382,38 @@ const I18N = {
     open_time: "Opening time (s)",
     close_time: "Closing time (s)",
     times_help: "With both times the position is estimated and a percentage can be set (needs the Stop button).",
+    cover_wiring_q: "Does it have a relay or wall buttons?",
+    cover_wiring_none: "Nothing: the RF remote only",
+    cover_wiring_wall: "Wall buttons only",
+    cover_wiring_relay: "A relay powers it",
+    cover_wiring_relay_wall: "A relay and wall buttons",
+    cover_relay_intro: "All optional. Without any of this the cover works by time with the RF remote.",
+    cover_relay_help: "Relay (Shelly, plug…) that powers the motor. Nothing is sent while the relay is off.",
+    cover_power_on: "Switch the relay on when needed to move the cover",
+    cover_power_up_delay_help: "Time given to the motor's receiver to start before the command is sent.",
+    cover_wall_type: "Kind of buttons",
+    cover_wall_momentary: "Push buttons (spring back)",
+    cover_wall_maintained: "Switch or up/0/down rocker (stays put)",
+    cover_wall_one: "Button input",
+    cover_wall_up: "Up button input",
+    cover_wall_down: "Down button input (optional)",
+    cover_wall_one_help: "One push button: every press is one step: open → stop → close → stop.",
+    cover_wall_one_maintained_help: "One switch: every change of position is one step: open → stop → close → stop.",
+    cover_wall_two_help: "Two push buttons: one opens, the other closes; any press while it moves stops it.",
+    cover_wall_two_maintained_help: "Up/0/down rocker: it opens or closes while held in place and stops when back at the centre.",
+    cover_meter_help: "Optional. A power sensor (W) of the motor, or an on/off entity telling whether it moves. On a full opening or closing the cover arrives when the motor stops at its limit switch, not when the time is up, so 0 % and 100 % correct themselves. If the original remote moves it, the position_reliable attribute turns false until the next full travel.",
+    cover_threshold: "The motor is running above (W)",
+    measure_title: "Time the travel",
+    measure_open: "Time the opening",
+    measure_close: "Time the closing",
+    measure_help: "For the opening, leave the cover fully closed first (and the other way round for the closing). Pressing sends the command and starts the clock; press “It has arrived” when the travel ends. The time is stored above and can be fine-tuned by hand.",
+    measure_save_first: "Save the device with the Open and Close buttons learned to time the travel.",
+    measure_opening: "Opening…",
+    measure_closing: "Closing…",
+    measure_arrived: "It has arrived",
+    measure_cancel: "Cancel",
+    measure_running: "Press “It has arrived” the moment the cover ends its travel.",
+    measure_running_meter: "It stops by itself when the meter sees the motor stop; you can also press “It has arrived”.",
     device_class: "Class",
     speeds: "Speeds",
     fan_light: "Fan light",
@@ -724,6 +788,8 @@ class RFDevicesPanel extends HTMLElement {
   set panel(v) {}
 
   disconnectedCallback() {
+    if (this._state.measure) clearInterval(this._state.measure.timer);
+    this._state.measure = null;
     this._stopLearn();
     if (this._liveUnsub) this._liveUnsub().catch(() => {});
     this._liveUnsub = null;
@@ -907,7 +973,7 @@ class RFDevicesPanel extends HTMLElement {
     d.options =
       type === "light" ? { mode: "toggle", switch_entity: null, state_entity: null, state_threshold: 3, power_entity: null, power_on_allowed: false }
       : type === "switch" ? { mode: "onoff", switch_entity: null, state_entity: null, state_threshold: 3, power_entity: null }
-      : type === "cover" ? { open_time: 0, close_time: 0, device_class: "shutter" }
+      : type === "cover" ? { open_time: 0, close_time: 0, device_class: "shutter", power_entity: null, state_entity: null, state_threshold: 3, switch_entity: null, switch_close_entity: null, wall_type: "momentary" }
       : type === "fan" ? { speeds: 3, power: "off", direction: "none", presets: [], light: "none", light_state_entity: null, light_state_threshold: 3, power_entity: null }
       : {};
     this.render();
@@ -1347,6 +1413,7 @@ class RFDevicesPanel extends HTMLElement {
   }
 
   relayMode(d) {
+    if (d.type === "cover") return "none"; // a cover has its own, simpler relay options
     return d.options.relay_mode || (d.options.power_entity ? "coupled" : "none");
   }
 
@@ -1375,7 +1442,137 @@ class RFDevicesPanel extends HTMLElement {
     </svg>`;
   }
 
+  /** Covers: what is wired, chosen by the user or read from the saved options. */
+  coverWiring(d) {
+    const w = this._state.coverWiring;
+    if (w && w.id === d.id) return w.value;
+    const o = d.options;
+    const wall = o.switch_entity || o.switch_close_entity;
+    return o.power_entity ? (wall ? "relay_wall" : "relay") : wall ? "wall" : "none";
+  }
+
+  /** Covers: a relay feeding the motor and wall buttons, each on its own; a meter. */
+  renderCoverRelay(d) {
+    const o = d.options;
+    const wiring = this.coverWiring(d);
+    const relay = wiring.startsWith("relay");
+    const wall = wiring.endsWith("wall");
+    const isMeter = (e, st) =>
+      /^(binary_sensor|input_boolean)\./.test(e) || (/^sensor\./.test(e) && st.attributes.unit_of_measurement === "W");
+    const isInput = (e) => /^(binary_sensor|input_boolean|switch)\./.test(e);
+    const numeric = o.state_entity && o.state_entity.startsWith("sensor.");
+    const opt = (v) => `<option value="${v}" ${wiring === v ? "selected" : ""}>${this.t("cover_wiring_" + v)}</option>`;
+    return `<div class="form">
+      <label class="full">${this.t("cover_wiring_q")}
+        <select data-cover-wiring="1">${["none", "wall", "relay", "relay_wall"].map(opt).join("")}</select>
+        <small>${this.t("cover_relay_intro")}</small></label>
+      ${relay
+        ? `${this.entitySelect("power_entity", this.t("relay_entity"), (e) => /^(switch|light)\./.test(e), this.t("cover_relay_help"))}
+           ${o.power_entity
+             ? `<label class="check full"><input type="checkbox" data-opt="power_on_allowed" data-rerender="1" ${(o.power_on_allowed ?? true) ? "checked" : ""}> ${this.t("cover_power_on")}</label>
+                ${(o.power_on_allowed ?? true)
+                  ? `<label>${this.t("power_up_delay")}<input class="dec" type="text" inputmode="decimal" data-min="0" data-max="15" data-opt="power_up_delay" value="${this.fmt(o.power_up_delay ?? 1)}"><small>${this.t("cover_power_up_delay_help")}</small></label>`
+                  : ""}`
+             : ""}`
+        : ""}
+      ${wall
+        ? `<label>${this.t("cover_wall_type")}<select data-opt="wall_type" data-rerender="1">
+             <option value="momentary" ${(o.wall_type || "momentary") === "momentary" ? "selected" : ""}>${this.t("cover_wall_momentary")}</option>
+             <option value="maintained" ${o.wall_type === "maintained" ? "selected" : ""}>${this.t("cover_wall_maintained")}</option></select></label>
+           ${this.entitySelect("switch_entity", this.t(o.switch_close_entity ? "cover_wall_up" : "cover_wall_one"), isInput)}
+           ${this.entitySelect("switch_close_entity", this.t("cover_wall_down"), isInput)}
+           <small class="full">${this.t(o.switch_close_entity
+             ? (o.wall_type === "maintained" ? "cover_wall_two_maintained_help" : "cover_wall_two_help")
+             : (o.wall_type === "maintained" ? "cover_wall_one_maintained_help" : "cover_wall_one_help"))}</small>`
+        : ""}
+      <h3 class="full">${this.t("meter_entity")}</h3>
+      ${this.entitySelect("state_entity", this.t("meter_entity"), isMeter, this.t("cover_meter_help"))}
+      ${numeric ? `<label>${this.t("cover_threshold")}<input class="dec" type="text" inputmode="decimal" data-min="0" data-opt="state_threshold" value="${this.fmt(o.state_threshold ?? 3)}"></label>` : ""}
+    </div>`;
+  }
+
+  setCoverWiring(value) {
+    const d = this._state.draft;
+    this._state.coverWiring = { id: d.id, value };
+    if (!value.startsWith("relay")) d.options.power_entity = null;
+    if (!value.endsWith("wall")) d.options.switch_entity = d.options.switch_close_entity = null;
+    this.dirty();
+    this.render();
+  }
+
+  // ---------- covers: timing a full travel ----------
+  coverEntity(d) {
+    const saved = this._state.devices.find((x) => x.id === d.id);
+    return (saved?.entities || []).find((e) => e.startsWith("cover."));
+  }
+
+  renderMeasure(d) {
+    const m = this._state.measure;
+    if (m) {
+      return `<div class="full measure"><b>${this.t(m.dir === "open" ? "measure_opening" : "measure_closing")}</b>
+        <span id="measure-clock" class="clock">0.0 s</span>
+        <div class="actions"><button class="primary" data-action="measure-stop">■ ${this.t("measure_arrived")}</button>
+        <button data-action="measure-cancel">${this.t("measure_cancel")}</button></div>
+        <small>${this.t(d.options.state_entity ? "measure_running_meter" : "measure_running")}</small></div>`;
+    }
+    if (!this.coverEntity(d) || !d.commands.open?.code || !d.commands.close?.code) {
+      return `<small class="full">⏱ ${this.t("measure_save_first")}</small>`;
+    }
+    return `<div class="full measure"><b>⏱ ${this.t("measure_title")}</b>
+      <div class="actions"><button data-action="measure" data-dir="open">▲ ${this.t("measure_open")}</button>
+      <button data-action="measure" data-dir="close">▼ ${this.t("measure_close")}</button></div>
+      <small>${this.t("measure_help")}</small></div>`;
+  }
+
+  async startMeasure(dir) {
+    const d = this._state.draft;
+    const eid = this.coverEntity(d);
+    if (!eid || this._state.measure) return;
+    try {
+      await this._hass.callService("cover", dir === "open" ? "open_cover" : "close_cover", { entity_id: eid });
+    } catch (e) {
+      return this.toast(e.message, true);
+    }
+    const m = (this._state.measure = { dir, eid, id: d.id, start: performance.now(), seen: false, last: 0 });
+    this.render();
+    m.timer = setInterval(() => {
+      const now = performance.now();
+      const clock = this.shadowRoot.getElementById("measure-clock");
+      if (clock) clock.textContent = `${((now - m.start) / 1000).toFixed(1)} s`;
+      // With a meter the motor itself says when it arrived.
+      const o = this._state.draft?.options || {};
+      const st = o.state_entity && this._hass.states[o.state_entity];
+      if (!st) return;
+      const running = st.state === "on" || Number(st.state) > (o.state_threshold ?? 3);
+      if (running) Object.assign(m, { seen: true, last: now });
+      else if (m.seen && now - m.last > 1500) this.stopMeasure(true, (m.last - m.start) / 1000);
+    }, 100);
+  }
+
+  async stopMeasure(keep, seconds = null) {
+    const m = this._state.measure;
+    if (!m) return;
+    clearInterval(m.timer);
+    this._state.measure = null;
+    const d = this._state.draft;
+    try {
+      if (!keep) {
+        if (d?.commands.stop?.code) await this._hass.callService("cover", "stop_cover", { entity_id: m.eid });
+      } else if (d && d.id === m.id) {
+        const elapsed = seconds ?? (performance.now() - m.start) / 1000;
+        d.options[m.dir === "open" ? "open_time" : "close_time"] = Math.min(300, Math.max(0.1, Math.round(elapsed * 10) / 10));
+        // It is at the end of its travel now, whatever the old times said.
+        await this._hass.callService("rf_devices", "set_position_state", { entity_id: m.eid, position: m.dir === "open" ? 100 : 0 });
+        this.dirty();
+      }
+    } catch (e) {
+      this.toast(e.message, true);
+    }
+    this.render();
+  }
+
   renderRelay(d) {
+    if (d.type === "cover") return this.renderCoverRelay(d);
     const o = d.options;
     const on = this.relayOn(d);
     const mode = this.relayMode(d);
@@ -1547,7 +1744,8 @@ class RFDevicesPanel extends HTMLElement {
         <label>${this.t("close_time")}<input class="dec" type="text" inputmode="decimal" data-min="0" data-max="300" data-opt="close_time" value="${this.fmt(o.close_time ?? 0)}"></label>
         <label>${this.t("device_class")}<select data-opt="device_class">
           ${COVER_CLASSES.map((c) => `<option ${o.device_class === c ? "selected" : ""}>${c}</option>`).join("")}</select></label>
-        <small class="full">${this.t("times_help")}</small>`;
+        <small class="full">${this.t("times_help")}</small>
+        ${this.renderMeasure(d)}`;
     } else if (d.type === "fan") {
       extra = `
         <label>${this.t("fan_power")}${sel("power", [["off", this.t("power_off_button")], ["toggle", this.t("power_toggle")]])}</label>
@@ -1624,6 +1822,7 @@ class RFDevicesPanel extends HTMLElement {
     const t = [["general", "⚙", "tab_general"], ["buttons", "🎛", "tab_buttons"]];
     if (this.hasLight(d)) t.push(["light", "💡", "tab_light"]);
     if (["light", "switch", "fan"].includes(d.type)) t.push(["relay", "🔌", "tab_relay"], ["power", "⚡", "tab_power"]);
+    if (d.type === "cover") t.push(["relay", "🔌", "tab_relay"]);
     t.push(["live", "▶", "tab_live"]);
     return t;
   }
@@ -2049,6 +2248,9 @@ class RFDevicesPanel extends HTMLElement {
         }
       })
     );
+    root.querySelectorAll("[data-cover-wiring]").forEach((el) =>
+      el.addEventListener("change", () => this.setCoverWiring(el.value))
+    );
     root.querySelectorAll("[data-has-light]").forEach((el) =>
       el.addEventListener("change", () => {
         const o = this._state.draft.options;
@@ -2110,10 +2312,14 @@ class RFDevicesPanel extends HTMLElement {
       case "delete": return this.deleteDevice(el.dataset.id);
       case "export": return this.exportAll();
       case "import": return this.shadowRoot.getElementById("import-file").click();
+      case "measure": return this.startMeasure(el.dataset.dir);
+      case "measure-stop": return this.stopMeasure(true);
+      case "measure-cancel": return this.stopMeasure(false);
       case "tab":
         this._state.tab = el.dataset.tab;
         return this.render();
       case "back":
+        this.stopMeasure(false);
         if (this._state.saveStatus === "dirty") this.persist();
         this._state.view = "list";
         this._state.draft = null;
@@ -2269,6 +2475,8 @@ button.link { background:none; border:1px solid var(--divider-color); color:var(
 .lrow { display:flex; flex-direction:column; font-size:12px; color:var(--secondary-text-color); margin-top:8px; }
 .lrow input[type=range] { width:100%; }
 .chipbtn { padding:4px 10px; font-size:13px; }
+.measure { border:1px solid var(--divider-color); border-radius:8px; padding:12px; }
+.measure .clock { font-size:28px; font-variant-numeric:tabular-nums; margin-left:12px; }
 .chipbtn.sync { border-style:dashed; }
 .badge { font-size:11px; color:var(--success-color, #43a047); white-space:nowrap; }
 .synccheck { font-size:12px; margin:8px 0 0; color:var(--secondary-text-color); }

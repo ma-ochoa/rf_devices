@@ -110,7 +110,7 @@ Tras instalarla aparece **RF Devices** en la barra lateral (solo para administra
 |---|---|---|
 | **Luz** | `light` (encendido, modos de temperatura de color, brillo) | Un botón que alterna, o encender y apagar separados; botones opcionales de color y de más o menos brillo |
 | **Interruptor** | `switch` | Alterno o encender/apagar |
-| **Persiana** | `cover` con posición estimada | Subir, bajar y parar; tiempos de recorrido para posicionar |
+| **Persiana** | `cover` con posición estimada | Subir, bajar y parar; tiempos de recorrido (cronometrados desde el panel) para posicionar; relé, botones de pared y medidor de consumo opcionales |
 | **Ventilador** | `fan` + `light` opcional | Encendido (alterno) o botón de apagado, de 1 a 10 velocidades, sentido de giro (un botón que invierte, o verano/invierno), modos especiales como *Brisa*, temporizadores y lámpara opcional con sus propios botones |
 | **Botones** | Un `button` por botón del mando | Cualquiera |
 
