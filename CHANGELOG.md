@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.12.0-labs.1 (test build, `labs` branch)
+## 0.12.0-labs.2 (test build, `labs` branch)
 
 Everything in this build is untested on real hardware: it is meant for users who try it and send
 the panel's *Diagnostics* report.
@@ -25,7 +25,7 @@ the panel's *Diagnostics* report.
   (433.42 + 433.92 MHz, each sending and listening) or one radio that retunes to send Somfy.
 - With several radios on one ESPHome device, learning uses the receiver whose frequency matches
   the transmitter.
-- Fix: **learning with an ESPHome receiver never started** in 0.12.0-iotorero.1 ("This ESPHome
+- Fix: **learning with an ESPHome receiver never started** in 0.12.0-labs.1 ("This ESPHome
   device has no RF receiver"). Home Assistant keeps no record of RF receivers, only of
   transmitters; RF Devices now asks the device itself for its receivers.
 - Fix: a **Broadlink's `radio_frequency` entity** could not learn ("Only ESPHome devices can
@@ -38,7 +38,7 @@ the panel's *Diagnostics* report.
 - Includes everything in 0.11.9 of the main branch: the fix for saving blinds and "buttons only"
   devices, timing a blind's travel from the panel, and its relay, wall buttons and power meter.
 
-## 0.12.0-iotorero.1 (test build)
+## 0.12.0-labs.1 (test build)
 
 - New: **`radio_frequency` transmitters** (Home Assistant 2026.5+). Codes are sent as raw timings
   through the core RF helper, so any RF adapter Home Assistant supports can be used, such as an

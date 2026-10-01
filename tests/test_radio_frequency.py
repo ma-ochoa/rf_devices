@@ -346,7 +346,7 @@ async def test_broadlink_radio_frequency_entity_learns_like_its_remote(
 
 
 async def test_receivers_come_from_the_device_not_from_home_assistant(hass: HomeAssistant, rf) -> None:
-    """Regression (0.12.0-iotorero.1): HA's ESPHome data never holds RF receivers."""
+    """Regression (0.12.0-labs.1): HA's ESPHome data never holds RF receivers."""
     from custom_components.rf_devices.transmitters.radio_frequency import (
         ReceiversUnknown,
         async_refresh_receivers,
