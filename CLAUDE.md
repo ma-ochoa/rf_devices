@@ -23,7 +23,7 @@ copies aquí ni a código, tests, issues o PRs.
 
 ```bash
 uv venv -p 3.14 .venv
-uv pip install -p .venv/bin/python pytest-homeassistant-custom-component broadlink==0.19.0 aioesphomeapi ruff
+uv pip install -p .venv/bin/python pytest-homeassistant-custom-component broadlink==0.19.0 rf-protocols aioesphomeapi ruff
 .venv/bin/pytest -q
 .venv/bin/ruff check custom_components tests --select E,F,W,I,B,UP --ignore E501
 node --check custom_components/rf_devices/frontend/rf-devices-panel.js
