@@ -5,4 +5,4 @@ set -euo pipefail
 cd "${CLAUDE_PROJECT_DIR:-.}"
 command -v uv >/dev/null 2>&1 || pip install -q uv
 [ -x .venv/bin/python ] || uv venv -q -p 3.14 .venv
-uv pip install -q -p .venv/bin/python pytest-homeassistant-custom-component broadlink==0.19.0 ruff
+uv pip install -q -p .venv/bin/python pytest-homeassistant-custom-component broadlink==0.19.0 aioesphomeapi ruff
