@@ -42,14 +42,14 @@ jobs:
       id-token: write
       actions: read # lets Claude read CI results on pull requests
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 1
       - uses: astral-sh/setup-uv@v6
       - name: Test environment (so Claude can run pytest and ruff)
         run: |
           uv venv -p 3.14 .venv
-          uv pip install -p .venv/bin/python pytest-homeassistant-custom-component broadlink==0.19.0 ruff
+          uv pip install -p .venv/bin/python pytest-homeassistant-custom-component broadlink==0.19.0 aioesphomeapi ruff
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
