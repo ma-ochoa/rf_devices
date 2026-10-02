@@ -1,12 +1,35 @@
 name: Tests
 
+# Runs once per change: on pushes to the long-lived branches and on pull requests.
+# Pushes to other branches are tested through their pull request (no double runs).
 on:
   push:
+    branches: [main, labs]
+    paths:
+      - "custom_components/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/tests.yml"
   pull_request:
+    paths:
+      - "custom_components/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - ".github/workflows/tests.yml"
+  workflow_dispatch:
+
+# A new push cancels the run still in progress for the same branch / PR.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -14,3 +37,5 @@ jobs:
       - run: uv pip install -p .venv/bin/python pytest-homeassistant-custom-component broadlink==0.19.0 ruff
       - run: .venv/bin/ruff check custom_components tests --select E,F,W,I,B,UP --ignore E501
       - run: .venv/bin/pytest -q
+      - name: Panel syntax
+        run: node --check custom_components/rf_devices/frontend/rf-devices-panel.js

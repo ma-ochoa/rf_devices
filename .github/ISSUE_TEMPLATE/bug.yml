@@ -1,0 +1,55 @@
+name: Bug report / Error
+description: Something in RF Devices does not work as expected.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks! English or Spanish are both fine / Puedes escribir en español.
+        Please attach the **Diagnostics** file: *Settings → Devices & services → RF Devices → ⋮ → Download diagnostics*.
+  - type: input
+    id: version
+    attributes:
+      label: RF Devices version
+      placeholder: "0.11.9"
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.9.3"
+    validations:
+      required: true
+  - type: input
+    id: transmitter
+    attributes:
+      label: Transmitter
+      description: Broadlink model, or ESPHome board + radio (e.g. ESP32 + CC1101, IoTorero).
+      placeholder: "Broadlink RM pro+"
+    validations:
+      required: true
+  - type: dropdown
+    id: device_type
+    attributes:
+      label: Device type
+      options: [Light, Switch, Fan, Fan with light, Cover / blind, Buttons only, Other]
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened and what did you expect?
+      description: Steps to reproduce if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        With `logger: logs: custom_components.rf_devices: debug` enabled. Remove anything private.
+      render: text
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Drag the diagnostics JSON here (or the JSON from the panel's "Diagnostics" button).
