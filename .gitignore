@@ -8,8 +8,7 @@ __pycache__/
 # Internal development notes and local context (never published)
 .internal/
 *.local.md
-CLAUDE.md
-.claude/
+.claude/settings.local.json
 
 # Local secrets and editor files
 .env

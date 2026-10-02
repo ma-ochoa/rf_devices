@@ -1,0 +1,59 @@
+name: Claude
+
+# Write "@claude ..." in an issue, a pull request or a review comment and Claude answers,
+# investigates or opens a pull request with the fix.
+#
+# Security: only the repository owner can trigger it. Comments by anyone else (including the
+# authors of third-party pull requests) are ignored, so outside code never runs with the secret.
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' &&
+        github.event.comment.author_association == 'OWNER' &&
+        contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' &&
+        github.event.comment.author_association == 'OWNER' &&
+        contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' &&
+        github.event.review.author_association == 'OWNER' &&
+        contains(github.event.review.body, '@claude')) ||
+      (github.event_name == 'issues' &&
+        github.event.issue.author_association == 'OWNER' &&
+        (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read # lets Claude read CI results on pull requests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: astral-sh/setup-uv@v6
+      - name: Test environment (so Claude can run pytest and ruff)
+        run: |
+          uv venv -p 3.14 .venv
+          uv pip install -p .venv/bin/python pytest-homeassistant-custom-component broadlink==0.19.0 ruff
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          claude_args: |
+            --allowedTools "Bash(.venv/bin/pytest:*),Bash(.venv/bin/ruff:*),Bash(node --check:*),Bash(git:*),Bash(gh issue:*),Bash(gh pr:*)"

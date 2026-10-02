@@ -1,0 +1,55 @@
+name: New device or hardware / Nuevo dispositivo
+description: Ask for support for a remote, motor, alarm, transmitter or receiver that does not work yet.
+labels: [device-request, needs-capture]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        RF Devices is developed without having your hardware, so **your captures are what make support possible**.
+        The more of the fields below you fill in, the faster it goes. English or Spanish / Puedes escribir en español.
+  - type: input
+    id: device
+    attributes:
+      label: Brand and model of the device / remote
+      placeholder: "HUNA SCE-R1 tubular motor, remote model ..."
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is it?
+      options: [Ceiling fan, Fan with light, Light, Blind / awning / shutter, Alarm, Doorbell / sensor (receive only), Transmitter or receiver hardware, Other]
+    validations:
+      required: true
+  - type: input
+    id: frequency
+    attributes:
+      label: Frequency (if known)
+      placeholder: "433.92 MHz / 433.42 MHz (Somfy) / 315 MHz / unknown"
+  - type: input
+    id: hardware
+    attributes:
+      label: Your transmitter / receiver
+      description: Broadlink model, or ESP32 board + radio (CC1101…) with the pins used.
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Home Assistant / ESPHome / RF Devices versions
+      placeholder: "HA 2026.9.3 · ESPHome 2026.9.1 · RF Devices 0.12.0-labs.3"
+  - type: textarea
+    id: captures
+    attributes:
+      label: Captures
+      description: |
+        Any of these helps (press each button 3 times; for rolling-code remotes, several presses in a row):
+        - the **export JSON** from the RF Devices panel with the learned codes;
+        - `rtl_433 -F json` output, or ESPHome `remote_receiver` with `dump: raw`;
+        - the JSON from the panel's **Diagnostics** button after trying.
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Other integrations or repos that already support it, how the original remote behaves, what you want to see in Home Assistant.

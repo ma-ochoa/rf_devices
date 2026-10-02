@@ -1,0 +1,37 @@
+name: Labels
+
+# Creates / updates the issue labels. Runs by itself when this file changes on main.
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/labels.yml"]
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          while IFS='|' read -r name color desc; do
+            [ -n "$name" ] && gh label create "$name" --color "$color" --description "$desc" --force
+          done <<'LABELS'
+          bug|d73a4a|Something does not work as expected
+          device-request|1d76db|Support for a new remote, transmitter or receiver
+          needs-capture|fbca04|Waiting for captured codes, rtl_433 output or the Diagnostics JSON
+          needs-info|fbca04|Waiting for more details from the reporter
+          labs|5319e7|Experimental hardware (labs branch)
+          transmitter|0e8a16|Broadlink, ESPHome radio_frequency, CC1101…
+          protocol|0e8a16|Generated protocols (Somfy RTS…)
+          relay|c5def5|Shelly and other relays, wall switches
+          panel|c5def5|Frontend panel
+          enhancement|a2eeef|New feature or improvement
+          third-party-pr|bfd4f2|Pull request from an outside contributor
+          good first issue|7057ff|Good for newcomers
+          LABELS

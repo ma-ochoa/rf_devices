@@ -1,0 +1,42 @@
+name: Release
+
+# Push a tag such as v0.12.0 or v0.12.0-labs.4 and this publishes the GitHub release.
+# A tag with a "-" (labs, beta…) becomes a pre-release: HACS only offers it to users who
+# enabled "Show beta versions" for RF Devices.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check versions match the tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(python3 -c "import json;print(json.load(open('custom_components/rf_devices/manifest.json'))['version'])")
+          const=$(python3 -c "import re;print(re.search(r'^VERSION = \"(.+)\"', open('custom_components/rf_devices/const.py').read(), re.M).group(1))")
+          echo "tag=$tag manifest=$manifest const=$const"
+          [ "$tag" = "$manifest" ] && [ "$tag" = "$const" ] || { echo "::error::Tag, manifest.json and const.VERSION must match"; exit 1; }
+      - name: Notes from CHANGELOG.md
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          awk -v v="$tag" '
+            /^## / { if (found) exit; if (index($0, "## " v) == 1) { found=1; next } }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md" > notes.md
+          cat notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=""
+          case "$GITHUB_REF_NAME" in *-*) flags="--prerelease --latest=false";; esac
+          gh release create "$GITHUB_REF_NAME" --title "RF Devices ${GITHUB_REF_NAME#v}" \
+            --notes-file notes.md --verify-tag $flags
