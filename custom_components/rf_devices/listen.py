@@ -205,6 +205,8 @@ class Follower:
     async def _async_recognise(self, bursts: list[list[int]], frequency: int) -> None:
         matches: list[tuple[str, str, str]] = []  # (device id, role, source)
         presses = {p for b in bursts for p in somfy.decode(b)}
+        if not presses:  # a receiver that reports carrier and silence swapped
+            presses = {p for b in bursts for p in somfy.decode([-v for v in b])}
         if presses:
             for p in sorted(presses, key=lambda p: p.rolling_code):
                 if p.address in self._own_somfy or self._last_somfy.get(p.address) == p.rolling_code:

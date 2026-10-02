@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.0-labs.4 (test build, `labs` branch)
+
+- Fix: **captures with the Athom / IoTorero RF-IR remote ended in "nothing was received"** although
+  the remote was heard clearly. Its receiver reports carrier and silence swapped, so the pause
+  between two frames arrived as one long pulse and the burst looked like a single frame that never
+  repeated. Both polarities are now tried and the one where a frame repeats wins; codes are stored
+  and sent with the real polarity. Found with a user's *Diagnostics* report. The same applies to
+  following the original remote.
+
 ## 0.12.0-labs.3 (test build, `labs` branch)
 
 - Fix: **a capture with an ESPHome receiver could take noise for the remote** (many "2-bit"

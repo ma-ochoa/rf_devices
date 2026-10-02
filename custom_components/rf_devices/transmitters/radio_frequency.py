@@ -102,7 +102,7 @@ def has_frame(burst: list[int]) -> bool:
     return any(_pulses(f) >= codec.MIN_RECEIVED_PULSES for f in frames_in(burst))
 
 
-def select_bursts(bursts: list[list[int]]) -> list[list[int]]:
+def _select(bursts: list[list[int]]) -> list[list[int]]:
     """The frames that look like the remote: long enough and of the usual length."""
     frames = [f for b in bursts for f in frames_in(b) if _pulses(f) >= codec.MIN_RECEIVED_PULSES]
     if not frames:
@@ -112,15 +112,38 @@ def select_bursts(bursts: list[list[int]]) -> list[list[int]]:
     return [f for f in frames if abs(_pulses(f) - usual) <= margin]
 
 
-def repeated_frames(bursts: list[list[int]]) -> int:
-    """How many identical frames the bursts hold. A remote repeats its frame; noise does not."""
-    kept = select_bursts(bursts)
-    if not kept:
+def _repeats(frames: list[list[int]]) -> int:
+    if not frames:
         return 0
     try:
-        return codec.analyze(codec.from_timings(kept))["good_frames"]
+        return codec.analyze(codec.from_timings(frames))["good_frames"]
     except codec.CodecError:
         return 0
+
+
+def best_polarity(bursts: list[list[int]]) -> tuple[list[list[int]], int, bool]:
+    """The remote's frames, how many are identical, and whether the receiver was inverted.
+
+    Some receivers report "carrier" and "silence" swapped (the Athom RF-IR
+    remote does): the pause between two frames then arrives as one long
+    pulse and the whole burst looks like a single, never repeated frame.
+    Both readings are tried and the one where a frame repeats most wins;
+    codes are always stored (and sent) with the real polarity.
+    """
+    normal = _select(bursts)
+    flipped = _select([[-v for v in b] for b in bursts])
+    n, f = _repeats(normal), _repeats(flipped)
+    return (flipped, f, True) if f > n else (normal, n, False)
+
+
+def select_bursts(bursts: list[list[int]]) -> list[list[int]]:
+    """The frames that look like the remote, whatever the receiver's polarity."""
+    return best_polarity(bursts)[0]
+
+
+def repeated_frames(bursts: list[list[int]]) -> int:
+    """How many identical frames the bursts hold. A remote repeats its frame; noise does not."""
+    return best_polarity(bursts)[1]
 
 
 class RadioFrequencyTransmitter(Transmitter):
@@ -309,8 +332,9 @@ class RadioFrequencyTransmitter(Transmitter):
         finally:
             unsubscribe()
 
-        kept = select_bursts(bursts)
-        _LOGGER.debug("Received %d bursts, kept %d: %s", len(bursts), len(kept), bursts)
+        kept, repeats, inverted = best_polarity(bursts)
+        debug.trace(self.hass, "rx_kept", bursts=len(bursts), frames=len(kept), repeats=repeats, inverted=inverted)
+        _LOGGER.debug("Received %d bursts, kept %d (inverted: %s): %s", len(bursts), len(kept), inverted, bursts)
         yield LearnEvent("captured", codec.capture_result(codec.from_timings(kept), frequency_mhz))
 
 

@@ -389,3 +389,37 @@ async def test_noise_is_not_captured(hass: HomeAssistant, rf, hass_ws_client, mo
     assert stages == ["captured"], ev
     assert ev["fingerprint"] == codec.fingerprint(held)
     assert ev["raw_analysis"]["bad_frames"] == 0
+
+
+def _inverted_receiver(code: str) -> list[int]:
+    """What a receiver with carrier and silence swapped reports: one burst, pauses as long pulses."""
+    timings, _ = codec.to_timings(code)
+    return [-t for t in timings[:-1]] + [10000]  # the closing silence arrives as its idle marker
+
+
+async def test_inverted_receiver_is_recognised(hass: HomeAssistant, rf, hass_ws_client, monkeypatch) -> None:
+    """Reported with an Athom RF-IR remote: the remote arrived clean but was never captured.
+
+    Its receiver delivers the polarity swapped, so the pause between frames is
+    a long pulse and the burst looked like one frame that never repeated.
+    """
+    from custom_components.rf_devices.transmitters.radio_frequency import best_polarity
+
+    held = capture(BITS_A, frames=5, truncated=False)
+    burst = _inverted_receiver(held)
+    assert all(-v < codec.MIN_GAP_US for v in burst if v < 0)  # no silence to split at
+    _frames, repeats, inverted = best_polarity([burst])
+    assert inverted and repeats >= 4
+    assert best_polarity(_esphome_bursts(held))[2] is False  # a normal receiver stays as it is
+
+    monkeypatch.setattr(rf_tx, "QUIET_AFTER_PRESS", 0.2)
+    ws = await hass_ws_client(hass)
+    await ws.send_json_auto_id({"type": "rf_devices/learn"})
+    assert (await ws.receive_json())["success"]
+    assert (await ws.receive_json(timeout=10))["event"]["stage"] == "press"
+    rf.client.emit(2, [120, -700, 90, -300] * 40)  # noise, either way round
+    rf.client.emit(2, burst)
+    stages, ev = await _stages(ws)
+    assert stages == ["captured"], ev
+    assert ev["fingerprint"] == codec.fingerprint(held)
+    assert ev["analysis"]["bits"] == codec.analyze(CODE_A)["bits"]
