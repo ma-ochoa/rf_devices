@@ -423,3 +423,56 @@ async def test_inverted_receiver_is_recognised(hass: HomeAssistant, rf, hass_ws_
     assert stages == ["captured"], ev
     assert ev["fingerprint"] == codec.fingerprint(held)
     assert ev["analysis"]["bits"] == codec.analyze(CODE_A)["bits"]
+
+
+def _lookalike_noise(seed: int) -> list[int]:
+    """Receiver noise that quantises like a frame: one wide pulse, then widths all over the place.
+
+    With the short/long threshold halfway between the narrowest and the widest
+    pulse, everything but the wide one reads as "short", so two such bursts
+    look like the same frame.
+    """
+    widths = [50, 66, 99, 131, 164, 197, 296, 394, 493, 591, 657]
+    pulses = [2134] + [widths[(seed * 7 + i * 5) % len(widths)] for i in range(19)]
+    return [p if i % 2 == 0 else -p for i, p in enumerate(pulses)] + [-3000]
+
+
+def test_a_frame_needs_two_clean_widths() -> None:
+    """Reported with an Athom RF-IR remote: two noise bursts matched and were stored as a code."""
+    from custom_components.rf_devices.transmitters.radio_frequency import (
+        best_polarity,
+        has_frame,
+        two_levels,
+    )
+
+    noise = [_lookalike_noise(1), _lookalike_noise(2)]
+    assert noise[0] != noise[1] and all(has_frame(b) for b in noise)
+    signatures = {codec.split_frames([abs(v) for v in b[:-1]])[0].signature for b in noise}
+    assert len(signatures) == 1  # what the old check compared: the same "frame" twice
+    assert not any(two_levels(b) for b in noise)
+    assert best_polarity(noise)[1] < 2
+
+    # A remote's frame passes, with receiver jitter and a header pulse too.
+    remote = _esphome_bursts(capture(BITS_A, frames=3, truncated=False))[0]
+    assert two_levels(remote) and two_levels([-v for v in remote])
+    jittery = [round(v * (1.2 if i % 3 else 0.82)) for i, v in enumerate(remote)]
+    assert two_levels(jittery)
+    assert two_levels([4500, -1500, *remote])
+    # Two widths too close together are not short and long.
+    assert not two_levels([300, -360] * 12)
+
+
+async def test_lookalike_noise_is_not_captured(hass: HomeAssistant, rf, hass_ws_client, monkeypatch) -> None:
+    monkeypatch.setattr(rf_tx, "QUIET_AFTER_PRESS", 0.2)
+    ws = await hass_ws_client(hass)
+    await ws.send_json_auto_id({"type": "rf_devices/learn"})
+    assert (await ws.receive_json())["success"]
+    assert (await ws.receive_json(timeout=10))["event"]["stage"] == "press"
+    for seed in range(4):
+        rf.client.emit(2, _lookalike_noise(seed))
+    await asyncio.sleep(0.5)  # weighed and dropped; still waiting for the remote
+    held = capture(BITS_B, frames=5, truncated=False)
+    rf.client.emit(2, _inverted_receiver(held))
+    stages, ev = await _stages(ws)
+    assert stages == ["captured"], ev
+    assert ev["fingerprint"] == codec.fingerprint(held)
