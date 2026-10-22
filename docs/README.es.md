@@ -309,6 +309,15 @@ en Home Assistant, así que añadir un aparato nunca obliga a cambiar el firmwar
    segundo. Se juntan las ráfagas del receptor, se descarta el ruido y el resultado se limpia
    igual que una captura del Broadlink.
 
+**Receptores sencillos (Athom / IoTorero).** Un receptor básico de 433 MHz entrega ruido todo el
+tiempo, y el firmware de Athom (comprobado con la v3.0.8) da su receptor con la polaridad
+cambiada: la señal como silencio y el silencio como señal, muy probablemente porque su
+configuración de ESPHome declara el pin del receptor RF como `inverted`. RF Devices admite los
+dos casos: una captura solo termina cuando la misma trama se ha recibido al menos dos veces, y
+cada captura se lee de las dos formas y se queda la lectura en la que la trama se repite. No hay
+que configurar nada, y un receptor con la polaridad correcta (o un firmware corregido) funciona
+igual. Un mando que envíe su trama una sola vez por pulsación no se puede capturar así.
+
 Los códigos se siguen guardando en formato Broadlink, así que pueden pasarse de un Broadlink a
 un emisor ESPHome y al revés. Se capturan mandos de código fijo con modulación OOK; los de
 código variable no se pueden repetir (Somfy RTS se genera, ver abajo). Con los registros de

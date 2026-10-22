@@ -294,6 +294,15 @@ Assistant, so adding a device never needs a new firmware.
    The receiver's bursts are joined, noise is dropped and the result is cleaned like a
    Broadlink capture.
 
+**Simple receivers (Athom / IoTorero).** A plain 433 MHz receiver delivers noise all the time,
+and the Athom firmware (checked with v3.0.8) reports its receiver with the polarity swapped:
+carrier as silence and silence as carrier, most likely because its ESPHome config declares the
+RF receiver pin as `inverted`. RF Devices copes with both: a capture ends only when the same
+frame has been received at least twice, and each capture is read both ways round, keeping the
+reading where the frame repeats. Nothing has to be configured, and a receiver with the right
+polarity (or a corrected firmware) works the same. A remote that sends its frame only once per
+press cannot be captured this way.
+
 Codes are still stored in the Broadlink format, so they can be moved between a Broadlink and an
 ESPHome transmitter. Fixed-code OOK remotes are captured; rolling-code remotes cannot be
 replayed (Somfy RTS is generated instead, see below). With debug logs on, every received burst
