@@ -44,6 +44,13 @@ MAX_PRESS = 3.0
 LENGTH_TOLERANCE = 0.1
 # A capture needs the same frame at least this many times: a remote repeats it, noise does not.
 MIN_REPEATS = 2
+# A remote's frame is made of two pulse widths (short and long). Each pulse must be
+# within this fraction of its width…
+LEVEL_TOLERANCE = 0.35
+# …the long one at least this many times the short one…
+MIN_LEVEL_RATIO = 1.6
+# …and only this share of the pulses (or 2, a header or a stretched first pulse) may be neither.
+STRAY_SHARE = 0.1
 
 
 def fit_carrier(wanted: int, ranges: list[tuple[int, int]]) -> int:
@@ -102,9 +109,44 @@ def has_frame(burst: list[int]) -> bool:
     return any(_pulses(f) >= codec.MIN_RECEIVED_PULSES for f in frames_in(burst))
 
 
+def _median(values: list[int]) -> float:
+    return values[len(values) // 2]
+
+
+def two_levels(frame: list[int]) -> bool:
+    """Whether a frame is made of two clean pulse widths, as a fixed-code remote's is.
+
+    Noise from a simple receiver is a spread of widths. Quantised into
+    short/long it can still look like a frame (one wide pulse makes all the
+    rest "short") and, by chance, match another one: that is how noise got
+    stored as a code. A remote's pulses gather around two widths instead.
+    """
+    widths = sorted(abs(v) for v in frame[: _pulses(frame)])
+    if len(widths) < codec.MIN_RECEIVED_PULSES:
+        return False
+    short, long = widths[len(widths) // 10], widths[-1 - len(widths) // 10]
+    for _ in range(5):  # two-cluster k-means, split at the geometric middle
+        cut = (short * long) ** 0.5
+        low = [w for w in widths if w < cut]
+        high = [w for w in widths if w >= cut]
+        if not low or not high:
+            return False
+        short, long = _median(low), _median(high)
+    if long < short * MIN_LEVEL_RATIO:
+        return False
+    stray = sum(
+        1 for w in widths
+        if abs(w - short) > short * LEVEL_TOLERANCE and abs(w - long) > long * LEVEL_TOLERANCE
+    )
+    return stray <= max(2, len(widths) * STRAY_SHARE)
+
+
 def _select(bursts: list[list[int]]) -> list[list[int]]:
-    """The frames that look like the remote: long enough and of the usual length."""
-    frames = [f for b in bursts for f in frames_in(b) if _pulses(f) >= codec.MIN_RECEIVED_PULSES]
+    """The frames that look like the remote: long enough, two clean widths and of the usual length."""
+    frames = [
+        f for b in bursts for f in frames_in(b)
+        if _pulses(f) >= codec.MIN_RECEIVED_PULSES and two_levels(f)
+    ]
     if not frames:
         return []
     usual, _ = Counter(_pulses(f) for f in frames).most_common(1)[0]

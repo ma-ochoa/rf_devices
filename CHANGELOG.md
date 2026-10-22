@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.0-labs.5 (test build, `labs` branch)
+
+- Fix: **receiver noise could be stored as a code** with an ESPHome receiver (Athom / IoTorero
+  RF-IR remote). Two noise bursts happened to read as the same short/long pattern (one wide
+  pulse made every other pulse "short"), so they counted as a repeated frame. A frame now also has
+  to be made of two clean pulse widths, short and long, as every fixed-code remote's is; a few
+  stray pulses (a header, a stretched first pulse) are still allowed. Found with a user's
+  *Diagnostics* report: all their real captures still pass, the noise one is now dropped. Codes
+  already stored are not changed: re-learn any button that does not work.
+
 ## 0.12.0-labs.4 (test build, `labs` branch)
 
 - Fix: **captures with the Athom / IoTorero RF-IR remote ended in "nothing was received"** although
