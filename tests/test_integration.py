@@ -549,3 +549,40 @@ async def test_cover_two_wall_push_buttons(hass, hass_storage) -> None:
     await press(up)
     assert hass.states.get("cover.persiana").state == "opening"
     await hass.services.async_call("cover", "stop_cover", {"entity_id": "cover.persiana"}, blocking=True)
+
+
+async def test_codes_that_are_not_a_remote_are_kept_out(
+    hass: HomeAssistant, setup, hass_ws_client, hass_storage
+) -> None:
+    """A junk code cannot come in through the panel, nor be sent; one already stored is flagged
+    but the device stays savable (the panel saves on every edit)."""
+    from .helpers import frame
+
+    alien = codec.to_b64(codec.encode(codec.Packet(0x52, 192, frame(BITS_A) + [245])))
+    ws = await hass_ws_client(hass)
+
+    await ws.send_json_auto_id({"type": "rf_devices/code/analyze", "code": alien})
+    r = (await ws.receive_json())["result"]
+    assert r["analysis"]["problem"] == codec.PROBLEM_NOT_RF_IR
+
+    await ws.send_json_auto_id({"type": "rf_devices/devices"})
+    fan = next(d for d in (await ws.receive_json())["result"] if d["id"] == "fan1")
+    fan["commands"]["x_bad"] = {"code": alien, "label": "Pegado"}
+    await ws.send_json_auto_id({"type": "rf_devices/device/save", "device": fan})
+    msg = await ws.receive_json()
+    assert not msg["success"] and "x_bad" in msg["error"]["message"]
+
+    await ws.send_json_auto_id({"type": "rf_devices/code/send", "code": alien})
+    assert not (await ws.receive_json())["success"]
+    assert _sent(setup.calls) == []
+
+    # Stored before this check existed (straight in the store): flagged, still savable.
+    store = setup.entry.runtime_data.store
+    store.devices["fan1"]["commands"]["x_bad"] = {"code": alien, "label": "Pegado"}
+    await ws.send_json_auto_id({"type": "rf_devices/devices"})
+    fan = next(d for d in (await ws.receive_json())["result"] if d["id"] == "fan1")
+    assert fan["commands"]["x_bad"]["analysis"]["problem"] == codec.PROBLEM_NOT_RF_IR
+    fan["name"] = "Ventilador salón"
+    await ws.send_json_auto_id({"type": "rf_devices/device/save", "device": fan})
+    msg = await ws.receive_json()
+    assert msg["success"], msg

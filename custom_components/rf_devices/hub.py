@@ -74,7 +74,7 @@ class RFHub:
         long press, so each transmission waits ``min_interval`` after the
         previous one finished.
         """
-        codec.decode(code)  # fail early on garbage
+        codec.ensure_usable(code)  # fail early on garbage
         entity_id = transmitter or self.default_transmitter
 
         async def send() -> None:

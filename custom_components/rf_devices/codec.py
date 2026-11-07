@@ -36,6 +36,13 @@ TAIL_GAP_TICKS = 1500
 
 DEFAULT_FRAMES = 4
 
+# A press never lasts this long, even held (``hold`` goes up to 10 s): a code
+# that does is not a remote's (e.g. something pasted with a wrong first byte).
+MAX_PRESS_MS = 15_000
+# Why a code cannot be stored or sent (``problem``).
+PROBLEM_NOT_RF_IR = "not_rf_ir"
+PROBLEM_TOO_LONG = "too_long"
+
 
 class CodecError(ValueError):
     """The code is not a valid Broadlink packet."""
@@ -228,6 +235,34 @@ def _dominant(frames: list[Frame]) -> tuple[str | None, list[Frame]]:
     return signature, [f for f in frames if f.signature == signature]
 
 
+def problem(code: str | bytes) -> str | None:
+    """Why a valid packet is still not a usable code, or None.
+
+    ``decode`` only checks the layout. A code pasted from another app can pass
+    it and still be junk: an unknown type byte, or a repeat count that would
+    keep the transmitter busy for minutes.
+    """
+    packet = decode(code)
+    if packet.type not in KINDS:
+        return PROBLEM_NOT_RF_IR
+    if sum(packet.pulses) * TICK_US * (packet.repeat + 1) / 1000 > MAX_PRESS_MS:
+        return PROBLEM_TOO_LONG
+    return None
+
+
+def ensure_usable(code: str | bytes) -> None:
+    """Raise ``CodecError`` unless the code can be stored and sent."""
+    packet = decode(code)
+    reason = problem(code)
+    if reason == PROBLEM_NOT_RF_IR:
+        raise CodecError(f"Not an IR or RF code (type byte 0x{packet.type:02X}): learn the button again")
+    if reason == PROBLEM_TOO_LONG:
+        raise CodecError(
+            f"The code would take {sum(packet.pulses) * TICK_US * (packet.repeat + 1) / 1_000_000:.0f} s "
+            f"to send (repeat {packet.repeat}): learn the button again"
+        )
+
+
 def analyze(code: str | bytes) -> dict:
     """Describe a packet for the UI."""
     packet = decode(code)
@@ -254,6 +289,7 @@ def analyze(code: str | bytes) -> dict:
             {"pulses": f.length, "ok": f.signature == signature} for f in frames
         ],
     }
+    result["problem"] = problem(code)
     result["needs_cleaning"] = packet.is_rf and (
         result["bad_frames"] > 0
         or packet.repeat > 0

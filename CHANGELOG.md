@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.0-labs.6 (test build, `labs` branch)
+
+- Codes that are not a remote's are kept out. A code pasted from another app could pass the
+  format check and still be junk: an unknown type byte (not IR or RF), or a repeat count that
+  would keep the transmitter busy for over a minute (one user's would have sent for 94 s). The
+  panel now refuses such a code when it is pasted or picked from the Broadlink, saving refuses it
+  when it is new or changed, and sending refuses it with a clear error. A code already stored is
+  flagged on its button ("learn the button again") and the device can still be saved.
+
 ## 0.12.0-labs.5 (test build, `labs` branch)
 
 - Fix: **receiver noise could be stored as a code** with an ESPHome receiver (Athom / IoTorero

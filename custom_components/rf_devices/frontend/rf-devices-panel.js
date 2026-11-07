@@ -310,6 +310,8 @@ const I18N = {
     add_button: "Añadir botón",
     button_name: "Nombre del botón extra",
     needs_cleaning: "Captura sin limpiar: {frames} tramas, se envía {times} ({ms} ms). Pulsa Limpiar.",
+    problem_not_rf_ir: "Esto no es un código IR ni RF (quizá se copió mal de otra aplicación). Vuelve a aprender el botón.",
+    problem_too_long: "Este código tardaría {s} s en enviarse: no es una pulsación de un mando. Vuelve a aprender el botón.",
     once: "1 vez",
     times: "{n} veces",
     duplicate: "Es el mismo código que «{other}».",
@@ -704,6 +706,8 @@ const I18N = {
     add_button: "Add button",
     button_name: "Extra button name",
     needs_cleaning: "Uncleaned capture: {frames} frames, sent {times} ({ms} ms). Press Clean.",
+    problem_not_rf_ir: "This is not an IR or RF code (maybe copied wrongly from another app). Learn the button again.",
+    problem_too_long: "This code would take {s} s to send: it is not a remote's press. Learn the button again.",
     once: "once",
     times: "{n} times",
     duplicate: "Same code as “{other}”.",
@@ -1664,7 +1668,7 @@ class RFDevicesPanel extends HTMLElement {
         const chipsOf = (slots) => slots
           .map((s) => {
             const c = d.commands[s.role];
-            const cls = !c ? (s.required ? "missing" : "opt") : c.analysis?.needs_cleaning ? "warn" : "ok";
+            const cls = !c ? (s.required ? "missing" : "opt") : c.analysis?.problem || c.analysis?.needs_cleaning ? "warn" : "ok";
             return `<span class="chip ${cls}">${esc(this.roleLabel(s.role, d))}</span>`;
           })
           .join("");
@@ -2419,6 +2423,7 @@ class RFDevicesPanel extends HTMLElement {
         const a = kind === "rf" ? c.analysis : null;
         const dup = has && c.fingerprint ? byFp[c.fingerprint].filter((r) => r !== role) : [];
         const warnings = [];
+        if (a?.problem) warnings.push(this.problemText(a));
         if (a?.needs_cleaning) warnings.push(this.t("needs_cleaning", { frames: a.frames, times: this.times(a.repeat), ms: a.sent_ms }));
         if (dup.length) warnings.push(this.t("duplicate", { other: dup.map((r) => this.roleLabel(r, d)).join(", ") }));
         const info = !has ? this.t("not_learned")
@@ -2499,9 +2504,16 @@ class RFDevicesPanel extends HTMLElement {
       </div>`;
   }
 
+  problemText(a) {
+    return this.t("problem_" + a.problem, { s: Math.round(a.sent_ms / 1000) });
+  }
+
   renderResult(r, withRaw = true, retry = false) {
     if (!r) return "";
     const differs = r.raw !== r.code;
+    if (r.analysis.problem)
+      return `<p class="warn-text">⚠ ${esc(this.problemText(r.analysis))}</p>
+        ${retry ? `<div class="actions"><span class="spacer"></span><button data-action="start-learn">${this.t("retry")}</button></div>` : ""}`;
     return `
       ${differs && withRaw ? `<div class="res"><b>${this.t("raw_capture")}</b><div class="sub">${this.summary(r.raw_analysis)}</div>${this.wave(r.raw_analysis.sample_us, r.raw_analysis.frame_map)}</div>` : ""}
       <div class="res"><b>${differs ? this.t("cleaned") : this.t("raw_capture")}</b><div class="sub">${this.summary(r.analysis)}</div>${this.wave(r.analysis.sample_us, r.analysis.frame_map)}
@@ -2509,9 +2521,9 @@ class RFDevicesPanel extends HTMLElement {
       <div class="actions">
         ${retry ? `<button data-action="start-learn">${this.t("retry")}</button>` : ""}
         <button data-action="test-code" data-which="code">${differs ? this.t("test_clean") : this.t("test")}</button>
-        ${differs ? `<button data-action="test-code" data-which="raw">${this.t("test_raw")}</button>` : ""}
+        ${differs && !r.raw_analysis.problem ? `<button data-action="test-code" data-which="raw">${this.t("test_raw")}</button>` : ""}
         <span class="spacer"></span>
-        ${differs ? `<button data-action="use" data-which="raw">${this.t("use_raw")}</button>` : ""}
+        ${differs && !r.raw_analysis.problem ? `<button data-action="use" data-which="raw">${this.t("use_raw")}</button>` : ""}
         <button class="primary" data-action="use" data-which="code">${differs ? this.t("use_clean") : this.t("use")}</button>
       </div>`;
   }
