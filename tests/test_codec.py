@@ -4,7 +4,7 @@ import pytest
 
 from custom_components.rf_devices import codec
 
-from .helpers import BITS_A, BITS_B, capture
+from .helpers import BITS_A, BITS_B, capture, frame
 
 
 def test_roundtrip() -> None:
@@ -93,3 +93,26 @@ def test_reclean_to_fewer_or_more_frames() -> None:
     # Back up from a single frame: the gap is estimated, never the closing silence.
     back = codec.split_frames(codec.decode(codec.clean(codec.clean(four, frames=1), frames=3)).pulses)
     assert len(back) == 3 and max(f.gap for f in back[:-1]) < codec.TAIL_GAP_TICKS
+
+
+def test_problem_flags_codes_that_are_not_a_remote() -> None:
+    """Reported by a user: a code pasted from another app was stored with an unknown
+    type byte and a repeat count that would have sent it for about 94 s."""
+    good = codec.clean(capture(BITS_A))
+    assert codec.problem(good) is None
+    codec.ensure_usable(good)
+    assert codec.analyze(good)["problem"] is None
+
+    alien = codec.to_b64(codec.encode(codec.Packet(0x52, 0, frame(BITS_A) + [245])))
+    assert codec.problem(alien) == codec.PROBLEM_NOT_RF_IR
+    with pytest.raises(codec.CodecError, match="0x52"):
+        codec.ensure_usable(alien)
+
+    endless = capture(BITS_A, frames=4, repeat=192, truncated=False)
+    assert codec.analyze(endless)["problem"] == codec.PROBLEM_TOO_LONG
+    with pytest.raises(codec.CodecError, match="repeat 192"):
+        codec.ensure_usable(endless)
+    # Cleaning makes it a normal press again…
+    assert codec.problem(codec.clean(endless)) is None
+    # …and the longest hold the panel offers is still fine.
+    assert codec.problem(codec.hold(good, 10)) is None

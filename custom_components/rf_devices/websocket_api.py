@@ -204,6 +204,25 @@ def ws_devices(hass, connection, msg) -> None:
     )
 
 
+def _refuse_new_unusable_codes(device: dict, previous: dict | None) -> None:
+    """A code that is not IR/RF (or would send for minutes) cannot come in.
+
+    Only new or changed codes are checked: one already stored keeps the
+    device savable (the panel saves on every edit) and is flagged instead.
+    """
+    before = (previous or {}).get("commands", {})
+    for role, cmd in device["commands"].items():
+        if command_kind(cmd) != KIND_RF:
+            continue
+        for key in ("code", "source"):
+            code = cmd.get(key)
+            if code and code != (before.get(role) or {}).get(key):
+                try:
+                    codec.ensure_usable(code)
+                except codec.CodecError as err:
+                    raise vol.Invalid(f"{role}: {err}") from err
+
+
 @websocket_api.websocket_command(
     {vol.Required("type"): "rf_devices/device/save", vol.Required("device"): dict}
 )
@@ -232,6 +251,7 @@ async def ws_device_save(hass, connection, msg) -> None:
             )
             return
         _refuse_own_sources(hass, validated)
+        _refuse_new_unusable_codes(validated, previous)
         await apply_relay_identity(hass, hub, previous, validated)
         device = await hub.store.async_upsert(validated)
     except (vol.Invalid, LearnError) as err:
