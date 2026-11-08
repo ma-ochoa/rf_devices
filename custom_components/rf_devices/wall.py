@@ -81,6 +81,9 @@ class WallGestures:
         self.count = 0
         self._timer: Callable[[], None] | None = None
         self._going_down = False  # fan_step: direction of the next step
+        # "Light at once": the first flip already toggled the light; the light's
+        # state before it, to put it back if the flips turn out to be a gesture.
+        self._instant_before: bool | None = None
 
     # --- lifecycle --------------------------------------------------------
     @callback
@@ -114,6 +117,11 @@ class WallGestures:
             self._on_flip()
         self._cancel()
         self.count += 1
+        if self.count == 1 and self._instant():
+            light = self._light()
+            if light is not None:
+                self._instant_before = bool(light.is_on)
+                self.hass.async_create_task(self._async_run("light_toggle"), "rf_devices wall light")
         # Only one flip does something: nothing to wait for. Otherwise wait,
         # even past the highest configured count, so a fourth flip is not
         # taken as the first of a new gesture.
@@ -121,6 +129,10 @@ class WallGestures:
             self._finish()
         else:
             self._timer = async_call_later(self.hass, self.window, self._timeout)
+
+    def _instant(self) -> bool:
+        """Toggle the light on the first flip, without waiting to count flips."""
+        return bool(self.device.get("options", {}).get("wall_instant")) and self.actions.get(1) == "light_toggle"
 
     @callback
     def _timeout(self, _now) -> None:
@@ -130,14 +142,31 @@ class WallGestures:
     @callback
     def _finish(self) -> None:
         count, self.count = self.count, 0
+        before, self._instant_before = self._instant_before, None
         # More flips than the table has count as the last row ("4 or more").
         action = self.actions.get(min(count, MAX_FLIPS), "none")
         self.hass.bus.async_fire(
             EVENT_WALL_GESTURE,
             {"device_id": self.device["id"], "name": self.device["name"], "flips": count, "action": action},
         )
+        if before is not None:
+            if count == 1:
+                return  # the light was already toggled on the flip
+            # A gesture after all: put the light back, then do the gesture.
+            self.hass.async_create_task(self._async_undo_then(before, action), f"rf_devices wall {action}")
+            return
         if action != "none":
             self.hass.async_create_task(self._async_run(action), f"rf_devices wall {action}")
+
+    async def _async_undo_then(self, light_was_on: bool, action: str) -> None:
+        light = self._light()
+        if light is not None:
+            try:
+                await light.async_restore_from_wall(light_was_on)
+            except HomeAssistantError as err:
+                _LOGGER.warning("Wall switch of %s (undo light): %s", self.device["name"], err)
+        if action != "none":
+            await self._async_run(action)
 
     # --- actions ----------------------------------------------------------
     def _entity(self, key: str) -> Any:
