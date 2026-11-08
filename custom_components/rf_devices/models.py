@@ -279,6 +279,9 @@ _POWER = {
         {vol.In(["1", "2", "3", "4"]): vol.In(list(WALL_ACTIONS))}
     ),
     vol.Optional("wall_window"): vol.All(vol.Coerce(float), vol.Range(0.2, 2.0)),
+    # Toggle the light on the first flip instead of after the window; if more
+    # flips follow (a gesture), the light is put back first.
+    vol.Optional("wall_instant", default=False): bool,
     vol.Optional("fallback_script", default=False): bool,  # mode B: script on the device
     # Seconds the script waits for Home Assistant to confirm a press.
     vol.Optional("fallback_wait", default=2.0): vol.All(vol.Coerce(float), vol.Range(0.5, 10)),

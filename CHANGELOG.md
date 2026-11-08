@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.12.1
+
+- Fixed: flipping the wall switch again because the light "did nothing" could leave it as it was.
+  While a light command has not shown on the meter yet, a new flip (or the same command again)
+  now means "insist", not "switch back": RF Devices resends the same command, never sooner than
+  2.5 s after the previous one, and sends nothing if the lamp has meanwhile reacted. Before, an
+  automatic resend and a flip one second later were two toggles that cancelled each other out.
+- New, wall gestures: "Light at once on one flip". The light switches as soon as the wall switch
+  moves instead of after the gesture window (0.6 s); if more flips follow (a gesture), the light
+  is put back first and the gesture runs, so it blinks for a moment.
+
 ## 0.12.0
 
 Stable release of everything tried in the `labs` builds (0.12.0-labs.1 … labs.7, listed below):

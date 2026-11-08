@@ -182,6 +182,8 @@ const I18N = {
     gesture_n: "{n} cambio(s)",
     gesture_4: "4 o más cambios",
     gesture_window: "Ventana entre cambios (s)",
+    wall_instant: "Luz al instante con un cambio",
+    wall_instant_help: "La luz cambia en cuanto mueves la pared, sin esperar a contar cambios. Si haces un gesto (2 o más cambios), primero se deshace la luz y luego se hace el gesto: la luz parpadea un momento.",
     ga_none: "Nada",
     ga_light_toggle: "Alternar luz",
     ga_light_on: "Encender luz",
@@ -583,6 +585,8 @@ const I18N = {
     gesture_n: "{n} flip(s)",
     gesture_4: "4 or more flips",
     gesture_window: "Window between flips (s)",
+    wall_instant: "Light at once on one flip",
+    wall_instant_help: "The light switches as soon as the wall switch moves, without waiting to count flips. On a gesture (2 or more flips) the light is put back first and then the gesture runs: the light blinks for a moment.",
     ga_none: "Nothing",
     ga_light_toggle: "Toggle light",
     ga_light_on: "Light on",
@@ -2193,7 +2197,11 @@ class RFDevicesPanel extends HTMLElement {
     return `<h3 class="full">${this.t("gestures_title")}</h3>
       <small class="full">${this.t("gestures_help")}</small>
       ${rows}
-      <label>${this.t("gesture_window")}<input class="dec" type="text" inputmode="decimal" data-min="0.2" data-max="2" data-opt="wall_window" value="${this.fmt(window)}"></label>`;
+      <label>${this.t("gesture_window")}<input class="dec" type="text" inputmode="decimal" data-min="0.2" data-max="2" data-opt="wall_window" value="${this.fmt(window)}"></label>
+      ${(table[1] || "none") === "light_toggle" && [2, 3, 4].some((n) => (table[n] || "none") !== "none")
+        ? `<label class="check full"><input type="checkbox" data-opt="wall_instant" data-rerender="1" ${o.wall_instant ? "checked" : ""}> ${this.t("wall_instant")}</label>
+           <small class="full">${this.t("wall_instant_help")}</small>`
+        : ""}`;
   }
 
   /** One remote, possibly two devices in HA: "Terrace fan + Terrace light". */

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 from homeassistant.const import STATE_OFF, STATE_ON
@@ -20,6 +21,23 @@ _LOGGER = logging.getLogger(__name__)
 RETRY_EVERY = 0.5  # s between meter readings while checking a light command
 RETRY_DEFAULT_AFTER = 4.0  # s for the lamp to show on the meter before resending
 RETRY_MIN_JUMP_W = 3.0  # a smaller change on the meter is not the lamp
+RETRY_MIN_SHOW = 2.5  # s a lamp needs to show a code on the meter; never resend sooner
+RETRY_MAX = 3  # resends left for one command (one automatic, one more per "again")
+
+
+@dataclass
+class _Pending:
+    """A light command not yet seen on the meter."""
+
+    target: bool
+    role: str
+    baseline: float  # meter reading before the code went out
+    meter: Meter
+    last_send: float  # loop time the code last went out
+    resends: int = 1
+    urgent: bool = False  # someone asked again: resend as soon as it is safe
+    sending: bool = False
+    task: asyncio.Task | None = field(default=None, repr=False)
 
 
 class OnOffMixin(RFEntity):
@@ -54,8 +72,7 @@ class OnOffMixin(RFEntity):
         self.user_on_at = float("-inf")  # loop time someone last asked to turn it on
         self.user_off_at = float("-inf")  # ... and to turn it off
         self.sent_at = float("-inf")  # loop time the last on/off/toggle code was sent
-        self._retry_task: asyncio.Task | None = None  # checking the last command on the meter
-        self._retrying = False  # the check is resending: let it finish
+        self._pending: _Pending | None = None  # last command, until the meter shows it
 
     @property
     def _mode(self) -> str:
@@ -130,7 +147,16 @@ class OnOffMixin(RFEntity):
     # --- actions ---------------------------------------------------------
     async def _async_set(self, on: bool | None) -> None:
         """Set the state; ``None`` flips it. Serialised so fast flips stay in step."""
-        self._cancel_retry()  # a new command replaces the check of the previous one
+        pending = self._pending
+        if pending is not None and (on is None or on == pending.target):
+            # Asked again before the lamp showed the last command on the meter:
+            # people press again because "nothing happened". That means insist,
+            # never "switch back" (two toggles would leave the lamp as it was).
+            pending.resends = min(RETRY_MAX, pending.resends + 1)
+            pending.urgent = True
+            _LOGGER.debug("%s: asked again while unconfirmed; insisting on %s", self.entity_id, pending.target)
+            return
+        self._cancel_retry()  # a different command replaces the check of the previous one
         async with self._op_lock:
             if on is None:
                 on = not self._attr_is_on
@@ -169,12 +195,13 @@ class OnOffMixin(RFEntity):
         if meter is not None and before is not None:
             baseline = await before
             if baseline is not None:
-                self._retry_task = self.hass.async_create_background_task(
-                    self._async_check_sent(meter, role, baseline),
-                    f"rf_devices check {self.entity_id}",
+                pending = _Pending(on, role, baseline, meter, self.hass.loop.time())
+                self._pending = pending
+                pending.task = self.hass.async_create_background_task(
+                    self._async_watch(pending), f"rf_devices check {self.entity_id}"
                 )
 
-    # --- check a command on the meter, resend once if the lamp ignored it --
+    # --- check a command on the meter, resend if the lamp ignored it ------
     @property
     def _retry_after(self) -> float:
         return float(self.device["options"].get("light_retry_after") or RETRY_DEFAULT_AFTER)
@@ -202,42 +229,58 @@ class OnOffMixin(RFEntity):
             return abs(after - before) >= max(RETRY_MIN_JUMP_W, lamp / 2)
         return (before > self._threshold) != (after > self._threshold)
 
+    @property
+    def command_unconfirmed(self) -> bool:
+        """The last command has not shown on the meter yet."""
+        return self._pending is not None
+
     @callback
     def _cancel_retry(self) -> None:
-        if self._retry_task is not None and not self._retrying:
-            self._retry_task.cancel()
-        self._retry_task = None
+        pending, self._pending = self._pending, None
+        if pending is not None and pending.task is not None and not pending.sending:
+            pending.task.cancel()
 
-    async def _async_check_sent(self, meter: Meter, role: str, before: float) -> None:
-        """Watch the meter after a command; if the lamp never moved, send it once more.
+    async def _async_watch(self, pending: _Pending) -> None:
+        """Watch the meter after a command; resend it while the lamp has not moved.
 
-        An RF code is sometimes not received (distance, interference, a busy
-        transmitter). Without this the light only looks switched in Home
-        Assistant, until the meter corrects it, and the wall switch seems dead.
+        An RF code is sometimes not received (distance, interference). Once
+        on its own after ``light_retry_after`` s, and once more each time
+        someone asks again (but never before the lamp had ``RETRY_MIN_SHOW`` s
+        to show the previous code, so two codes never cancel each other out).
         """
         loop = self.hass.loop
-        end = loop.time() + self._retry_after
-        while loop.time() < end:
-            await asyncio.sleep(RETRY_EVERY)
-            if not self.powered or self.hub.calibrating or self._motor_busy():
-                return
-            watts = await meter.async_read()
-            if watts is not None and self._lamp_changed(before, watts):
-                return
-        async with self._op_lock:
-            if self._retry_task is not asyncio.current_task():
-                return  # replaced by a newer command meanwhile
-            self._retrying = True
-            try:
-                _LOGGER.info(
-                    "%s: the lamp did not react within %.1f s (%s W); sending %s again",
-                    self.entity_id, self._retry_after, before, role,
-                )
-                self.sent_at = loop.time()
-                await self.async_send_role(role)
-            finally:
-                self._retrying = False
-                self._retry_task = None
+        try:
+            while self._pending is pending:
+                await asyncio.sleep(RETRY_EVERY)
+                if not self.powered or self.hub.calibrating or self._motor_busy():
+                    return
+                watts = await pending.meter.async_read()
+                if watts is not None and self._lamp_changed(pending.baseline, watts):
+                    return  # confirmed
+                wait = RETRY_MIN_SHOW if pending.urgent else self._retry_after
+                if loop.time() < pending.last_send + wait:
+                    continue
+                if pending.resends <= 0:
+                    return  # give up; the meter will correct the state
+                async with self._op_lock:
+                    if self._pending is not pending:
+                        return
+                    pending.resends -= 1
+                    pending.urgent = False
+                    pending.sending = True
+                    try:
+                        _LOGGER.info(
+                            "%s: the lamp did not react (%s W); sending %s again",
+                            self.entity_id, pending.baseline, pending.role,
+                        )
+                        self.sent_at = loop.time()
+                        await self.async_send_role(pending.role)
+                    finally:
+                        pending.sending = False
+                        pending.last_send = loop.time()
+        finally:
+            if self._pending is pending:
+                self._pending = None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         self.user_on_at = self.hass.loop.time()
@@ -279,6 +322,10 @@ class OnOffMixin(RFEntity):
     async def async_toggle_from_wall(self) -> None:
         """Mode B: the wall switch was flipped."""
         await self._async_set(None)
+
+    async def async_restore_from_wall(self, on: bool) -> None:
+        """The flip that toggled the light at once was the start of a gesture: undo it."""
+        await self._async_set(on)
 
     async def async_sync(self) -> None:
         """Sync button: flip the state in HA without transmitting."""
