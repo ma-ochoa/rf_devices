@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.10
+
+- New, light tab: "Send the command again if the lamp does not respond". With a power meter,
+  every light command (panel, voice, wall switch) is checked on the meter; if the lamp did not
+  change within a few seconds (4 by default) the command is sent once more. An RF code is
+  sometimes missed, and the wall switch then seemed dead. A newer command cancels the check, and
+  nothing is resent while the fan is changing speed (or running, without a calibration).
+- Fixed: after an own light command the power reading could switch the light's state back too
+  early (on → off → on) with lamps that take 8–9 s to show on the meter. It now waits 10 s
+  instead of 6 s.
+
 ## 0.11.9
 
 - Fixed: a blind/awning or a "buttons only" device could not be created or saved ("not a valid

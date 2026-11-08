@@ -166,6 +166,10 @@ _LIGHT_EXTRAS = {
     # Seconds a brightness button must be held to go from minimum to maximum.
     vol.Optional("light_dim_time", default=5.0): vol.All(vol.Coerce(float), vol.Range(0.5, 30)),
     vol.Optional("light_dim", default=False): bool,  # brighter / dimmer buttons (held)
+    # Check every light command on the meter and send it once more when the lamp
+    # did not react within light_retry_after seconds (an RF code can be missed).
+    vol.Optional("light_retry", default=False): bool,
+    vol.Optional("light_retry_after", default=4.0): vol.All(vol.Coerce(float), vol.Range(2, 20)),
 }
 _HHMM = vol.Match(r"^([01]\d|2[0-3]):[0-5]\d$")
 _POWER = {

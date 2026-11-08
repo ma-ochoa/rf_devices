@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from homeassistant.const import STATE_OFF, STATE_ON
@@ -12,6 +13,13 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import MODE_TOGGLE, ROLE_OFF, ROLE_ON, ROLE_TOGGLE
 from .entity import RFEntity, feedback_on, last_on
+from .meter import Meter
+
+_LOGGER = logging.getLogger(__name__)
+
+RETRY_EVERY = 0.5  # s between meter readings while checking a light command
+RETRY_DEFAULT_AFTER = 4.0  # s for the lamp to show on the meter before resending
+RETRY_MIN_JUMP_W = 3.0  # a smaller change on the meter is not the lamp
 
 
 class OnOffMixin(RFEntity):
@@ -46,6 +54,8 @@ class OnOffMixin(RFEntity):
         self.user_on_at = float("-inf")  # loop time someone last asked to turn it on
         self.user_off_at = float("-inf")  # ... and to turn it off
         self.sent_at = float("-inf")  # loop time the last on/off/toggle code was sent
+        self._retry_task: asyncio.Task | None = None  # checking the last command on the meter
+        self._retrying = False  # the check is resending: let it finish
 
     @property
     def _mode(self) -> str:
@@ -120,6 +130,7 @@ class OnOffMixin(RFEntity):
     # --- actions ---------------------------------------------------------
     async def _async_set(self, on: bool | None) -> None:
         """Set the state; ``None`` flips it. Serialised so fast flips stay in step."""
+        self._cancel_retry()  # a new command replaces the check of the previous one
         async with self._op_lock:
             if on is None:
                 on = not self._attr_is_on
@@ -148,12 +159,85 @@ class OnOffMixin(RFEntity):
 
     async def _async_send_state(self, on: bool) -> None:
         self.sent_at = self.hass.loop.time()
-        if self._toggle_mode:
-            await self.async_send_role(self._roles["toggle"])
-        else:
-            await self.async_send_role(self._roles["on" if on else "off"])
+        role = self._roles["toggle"] if self._toggle_mode else self._roles["on" if on else "off"]
+        meter = self._retry_meter()
+        # The reading before the lamp can react, taken while the code goes out.
+        before = self.hass.async_create_task(meter.async_read()) if meter else None
+        await self.async_send_role(role)
         self._attr_is_on = on
         self.async_write_ha_state()
+        if meter is not None and before is not None:
+            baseline = await before
+            if baseline is not None:
+                self._retry_task = self.hass.async_create_background_task(
+                    self._async_check_sent(meter, role, baseline),
+                    f"rf_devices check {self.entity_id}",
+                )
+
+    # --- check a command on the meter, resend once if the lamp ignored it --
+    @property
+    def _retry_after(self) -> float:
+        return float(self.device["options"].get("light_retry_after") or RETRY_DEFAULT_AFTER)
+
+    def _retry_meter(self) -> Meter | None:
+        """The meter that shows this light, if resending a missed command is on."""
+        opts = self.device["options"]
+        entity = opts.get(self._state_key)
+        if not opts.get("light_retry") or not entity or not entity.startswith("sensor."):
+            return None
+        if self.hub.calibrating or self._motor_busy():
+            return None
+        return Meter(self.hass, entity)
+
+    def _lamp_watts(self) -> float | None:
+        """The lamp's draw, when a calibration knows it."""
+        return None
+
+    def _motor_busy(self) -> bool:
+        """A motor on the same meter is changing speed: the meter cannot tell."""
+        return False
+
+    def _lamp_changed(self, before: float, after: float) -> bool:
+        if (lamp := self._lamp_watts()) is not None:
+            return abs(after - before) >= max(RETRY_MIN_JUMP_W, lamp / 2)
+        return (before > self._threshold) != (after > self._threshold)
+
+    @callback
+    def _cancel_retry(self) -> None:
+        if self._retry_task is not None and not self._retrying:
+            self._retry_task.cancel()
+        self._retry_task = None
+
+    async def _async_check_sent(self, meter: Meter, role: str, before: float) -> None:
+        """Watch the meter after a command; if the lamp never moved, send it once more.
+
+        An RF code is sometimes not received (distance, interference, a busy
+        transmitter). Without this the light only looks switched in Home
+        Assistant, until the meter corrects it, and the wall switch seems dead.
+        """
+        loop = self.hass.loop
+        end = loop.time() + self._retry_after
+        while loop.time() < end:
+            await asyncio.sleep(RETRY_EVERY)
+            if not self.powered or self.hub.calibrating or self._motor_busy():
+                return
+            watts = await meter.async_read()
+            if watts is not None and self._lamp_changed(before, watts):
+                return
+        async with self._op_lock:
+            if self._retry_task is not asyncio.current_task():
+                return  # replaced by a newer command meanwhile
+            self._retrying = True
+            try:
+                _LOGGER.info(
+                    "%s: the lamp did not react within %.1f s (%s W); sending %s again",
+                    self.entity_id, self._retry_after, before, role,
+                )
+                self.sent_at = loop.time()
+                await self.async_send_role(role)
+            finally:
+                self._retrying = False
+                self._retry_task = None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         self.user_on_at = self.hass.loop.time()
@@ -165,6 +249,7 @@ class OnOffMixin(RFEntity):
 
     async def async_set_assumed_state(self, is_on: bool) -> None:
         """Service handler: change the state without transmitting."""
+        self._cancel_retry()
         self._attr_is_on = is_on
         self.async_write_ha_state()
 
@@ -178,6 +263,7 @@ class OnOffMixin(RFEntity):
 
     async def async_sync(self) -> None:
         """Sync button: flip the state in HA without transmitting."""
+        self._cancel_retry()
         async with self._op_lock:
             self._attr_is_on = not self._attr_is_on
             self.async_write_ha_state()

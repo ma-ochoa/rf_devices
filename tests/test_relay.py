@@ -724,3 +724,59 @@ async def test_lamp_jump_reported_in_two_pieces(hass, hass_storage, monkeypatch)
     await asyncio.sleep(0.5)
     await hass.async_block_till_done()
     assert hass.states.get(LIGHT).state == "off"  # settled vs settled: -37 W, the lamp
+
+
+async def _retry_setup(hass, hass_storage, monkeypatch, **options):
+    from custom_components.rf_devices import onoff
+
+    monkeypatch.setattr(onoff, "RETRY_EVERY", 0.02)
+    monkeypatch.setattr(onoff, "RETRY_DEFAULT_AFTER", 0.2)
+    return await _setup(hass, hass_storage, monkeypatch, relay_mode="detached", **options)
+
+
+async def _settle(hass, seconds: float = 0.5) -> None:
+    await asyncio.sleep(seconds)
+    await hass.async_block_till_done()
+
+
+async def test_missed_light_command_is_sent_again(hass, hass_storage, monkeypatch) -> None:
+    t = await _retry_setup(hass, hass_storage, monkeypatch, light_retry=True)
+    t.room.drop_next_light = True  # the lamp misses the first code
+    hass.states.async_set(WALL, "on")  # mode B: one flip of the wall switch
+    await _settle(hass, 1.2)
+    assert t.room.rf == ["light", "light"]
+    assert t.room.light and hass.states.get(LIGHT).state == "on"
+
+
+async def test_received_light_command_is_not_repeated(hass, hass_storage, monkeypatch) -> None:
+    t = await _retry_setup(hass, hass_storage, monkeypatch, light_retry=True)
+    await call(hass, "light", "turn_on", LIGHT)
+    await _settle(hass)
+    assert t.room.rf == ["light"] and t.room.light
+
+
+async def test_new_command_replaces_the_check(hass, hass_storage, monkeypatch) -> None:
+    t = await _retry_setup(hass, hass_storage, monkeypatch, light_retry=True)
+    t.room.drop_next_light = True
+    await call(hass, "light", "turn_on", LIGHT)
+    await call(hass, "light", "turn_off", LIGHT)  # before the check ends: no resend of the first
+    await _settle(hass)
+    assert t.room.rf == ["light", "light"]
+
+
+async def test_light_retry_is_off_by_default(hass, hass_storage, monkeypatch) -> None:
+    t = await _retry_setup(hass, hass_storage, monkeypatch)
+    t.room.drop_next_light = True
+    await call(hass, "light", "turn_on", LIGHT)
+    await _settle(hass)
+    assert t.room.rf == ["light"] and not t.room.light
+
+
+async def test_no_retry_while_the_motor_changes(hass, hass_storage, monkeypatch) -> None:
+    """A plain threshold cannot see the lamp with the fan running: never resend then."""
+    t = await _retry_setup(hass, hass_storage, monkeypatch, light_retry=True)
+    await call(hass, "fan", "set_percentage", FAN, percentage=50)
+    t.room.drop_next_light = True
+    await call(hass, "light", "turn_on", LIGHT)
+    await _settle(hass)
+    assert t.room.rf == ["s1", "light"]

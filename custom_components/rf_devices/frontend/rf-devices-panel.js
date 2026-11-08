@@ -224,6 +224,9 @@ const I18N = {
     color_kelvin: "Temperatura de cada modo (K)",
     color_kelvin_help: "Para regular la temperatura desde Home Assistant o Alexa. Por ejemplo: 6000, 4000, 2700.",
     dim_time: "Segundos manteniendo pulsado de mínimo a máximo brillo",
+    light_retry: "Repetir la orden si la lámpara no responde",
+    light_retry_help: "Tras cada orden de luz, RF Devices mira el consumo. Si la lámpara no ha cambiado en ese tiempo, envía la orden una vez más (a veces el receptor no capta el código). No actúa mientras el ventilador cambia de velocidad.",
+    light_retry_after: "Segundos de espera antes de repetir",
     frames_label: "Tramas",
     frames_help: "Cuántas repeticiones de la trama se envían. Si al probar el botón se activa dos veces (p. ej. enciende y apaga), prueba con menos; si a veces no responde, con más.",
     timers: "Temporizadores (separados por comas)",
@@ -565,6 +568,9 @@ const I18N = {
     color_kelvin: "Colour temperature of each mode (K)",
     color_kelvin_help: "To set the temperature from Home Assistant or Alexa. E.g. 6000, 4000, 2700.",
     dim_time: "Seconds held from minimum to maximum brightness",
+    light_retry: "Send the command again if the lamp does not respond",
+    light_retry_help: "After every light command RF Devices watches the meter. If the lamp has not changed within this time it sends the command once more (a receiver sometimes misses a code). Not done while the fan is changing speed.",
+    light_retry_after: "Seconds to wait before sending again",
     frames_label: "Frames",
     frames_help: "How many repetitions of the frame are sent. If testing triggers twice (e.g. on then off), try fewer; if it sometimes does not respond, try more.",
     timers: "Timers (comma separated)",
@@ -1405,7 +1411,18 @@ class RFDevicesPanel extends HTMLElement {
            <label>${this.t("color_kelvin")}<input data-opt="light_color_kelvin" data-list="1" data-nums="1" value="${esc((o.light_color_kelvin || []).join(", "))}" placeholder="6000, 4000, 2700"><small>${this.t("color_kelvin_help")}</small></label>`
         : "") +
       box("light_dim") +
-      (o.light_dim ? `<label>${this.t("dim_time")}<input class="dec" type="text" inputmode="decimal" data-min="0.5" data-max="30" data-opt="light_dim_time" value="${this.fmt(o.light_dim_time ?? 5)}"></label>` : "");
+      (o.light_dim ? `<label>${this.t("dim_time")}<input class="dec" type="text" inputmode="decimal" data-min="0.5" data-max="30" data-opt="light_dim_time" value="${this.fmt(o.light_dim_time ?? 5)}"></label>` : "") +
+      this.lightRetry();
+  }
+
+  lightRetry() {
+    const d = this._state.draft;
+    const o = d.options;
+    const meter = o[d.type === "fan" ? "light_state_entity" : "state_entity"];
+    if (!meter || !meter.startsWith("sensor.")) return "";
+    return `<label class="check full"><input type="checkbox" data-opt="light_retry" data-rerender="1" ${o.light_retry ? "checked" : ""}> ${this.t("light_retry")}</label>
+      <small class="full">${this.t("light_retry_help")}</small>` +
+      (o.light_retry ? `<label>${this.t("light_retry_after")}<input class="dec" type="text" inputmode="decimal" data-min="2" data-max="20" data-opt="light_retry_after" value="${this.fmt(o.light_retry_after ?? 4)}"></label>` : "");
   }
 
   relayOn(d) {
