@@ -780,3 +780,74 @@ async def test_no_retry_while_the_motor_changes(hass, hass_storage, monkeypatch)
     await call(hass, "light", "turn_on", LIGHT)
     await _settle(hass)
     assert t.room.rf == ["s1", "light"]
+
+
+async def _flip(hass) -> None:
+    state = hass.states.get(WALL).state
+    hass.states.async_set(WALL, "off" if state == "on" else "on")
+    await hass.async_block_till_done()
+
+
+async def _timing_setup(hass, hass_storage, monkeypatch, **options):
+    from custom_components.rf_devices import onoff
+
+    monkeypatch.setattr(onoff, "RETRY_EVERY", 0.02)
+    monkeypatch.setattr(onoff, "RETRY_DEFAULT_AFTER", 0.6)
+    monkeypatch.setattr(onoff, "RETRY_MIN_SHOW", 0.15)
+    return await _setup(hass, hass_storage, monkeypatch, relay_mode="detached", light_retry=True, **options)
+
+
+async def test_flip_while_unconfirmed_insists(hass, hass_storage, monkeypatch) -> None:
+    """Nothing happened, so the wall is flipped again: insist, never toggle back."""
+    t = await _timing_setup(hass, hass_storage, monkeypatch)
+    t.room.drop_next_light = True
+    await _flip(hass)
+    await _flip(hass)  # at once: it must not send a second toggle right away
+    assert t.room.rf == ["light"]
+    await _settle(hass, 0.4)  # resent once the lamp had time to show the first
+    assert t.room.rf == ["light", "light"]
+    assert t.room.light and hass.states.get(LIGHT).state == "on"
+
+
+async def test_flip_right_after_a_received_resend_sends_nothing(hass, hass_storage, monkeypatch) -> None:
+    """The 00:38:57 case: an automatic resend and a flip one second apart cancelled out."""
+    from custom_components.rf_devices import onoff
+
+    t = await _timing_setup(hass, hass_storage, monkeypatch)
+    monkeypatch.setattr(onoff, "RETRY_MIN_SHOW", 0.5)  # longer than the lamp takes to show
+    publish = t.room.publish
+    t.room.publish = lambda: hass.loop.call_later(0.3, publish)  # the lamp shows ~0.3 s late
+    t.room.drop_next_light = True
+    await _flip(hass)
+    await _settle(hass, 0.7)  # the automatic resend went out and was received, not yet seen
+    assert t.room.rf == ["light", "light"] and t.room.light
+    await _flip(hass)  # "it did not work": but it just did
+    await _settle(hass, 0.6)
+    assert t.room.rf == ["light", "light"] and t.room.light
+    assert hass.states.get(LIGHT).state == "on"
+
+
+async def test_flip_after_the_lamp_reacted_toggles(hass, hass_storage, monkeypatch) -> None:
+    t = await _timing_setup(hass, hass_storage, monkeypatch)
+    await _flip(hass)
+    await _settle(hass, 0.2)  # seen on the meter: confirmed
+    await _flip(hass)
+    await _settle(hass, 0.2)
+    assert t.room.rf == ["light", "light"] and not t.room.light
+    assert hass.states.get(LIGHT).state == "off"
+
+
+async def test_light_at_once_then_gesture_puts_it_back(hass, hass_storage, monkeypatch) -> None:
+    t = await _setup(hass, hass_storage, monkeypatch, relay_mode="detached",
+                     wall_actions=GESTURES, wall_window=0.3, wall_instant=True)
+    await _flip(hass)
+    await asyncio.sleep(0.05)
+    await hass.async_block_till_done()
+    assert t.room.light and t.room.rf == ["light"]  # before the window ended
+    await _settle(hass, 0.4)
+    assert t.room.rf == ["light"]  # one flip: nothing more
+    await _flip(hass)
+    await _flip(hass)  # two flips: a gesture after all
+    await _settle(hass, 0.6)
+    assert t.room.rf == ["light", "light", "light", "s1"]
+    assert t.room.light and t.room.speed == 1  # light as it was, fan stepped
