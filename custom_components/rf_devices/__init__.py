@@ -1,4 +1,4 @@
-"""RF Devices: learn, clean and use Broadlink RF codes from a visual panel."""
+"""RF Devices: learn, generate and send RF codes (or drive other integrations) from a visual panel."""
 
 from __future__ import annotations
 
@@ -13,9 +13,10 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.typing import ConfigType
 
-from . import services, websocket_api
+from . import debug, services, websocket_api
 from .const import DOMAIN, MANUFACTURER, PANEL_URL, PLATFORMS, STATIC_URL, VERSION
 from .hub import RFHub
+from .listen import Follower
 from .models import device_model, entity_plan, registry_device_ids
 from .relay import RelayController, relay_mode
 from .store import RFStore
@@ -32,6 +33,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     )
     websocket_api.async_register(hass)
     services.async_register(hass)
+    debug.async_start_log_capture(hass)
     return True
 
 
@@ -61,6 +63,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: RFConfigEntry) -> bool:
         if relay_mode(device) == "wall_only" and device["options"].get("switch_entity"):
             wall = WallGestures(hass, device, device["options"]["switch_entity"])
             entry.async_on_unload(wall.async_start())
+    if any(device.get("follow") for device in store.devices.values()):
+        # Listen to the original remotes of the devices that ask for it.
+        hub.follower = Follower(hass, hub)
+        entry.async_on_unload(hub.follower.async_start())
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     if PANEL_URL not in hass.data.get(frontend.DATA_PANELS, {}):

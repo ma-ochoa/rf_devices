@@ -1,4 +1,4 @@
-"""Sending codes and learning new ones through a Broadlink remote."""
+"""Sending codes and learning new ones through the chosen transmitter."""
 
 from __future__ import annotations
 
@@ -6,46 +6,34 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from typing import Any
+from contextlib import aclosing
 
-from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import entity_registry as er
 
-from . import codec
+from . import codec, debug
+from .codec import capture_result
 from .const import (
     CONF_MIN_INTERVAL,
-    CONF_POWER_SWITCH,
     CONF_TRANSMITTER,
     DEFAULT_MIN_INTERVAL,
-    HEALTH_DELAY,
-    HEALTH_TIMEOUT,
     LEARN_COOLDOWN,
-    LEARN_TIMEOUT,
-    MAX_POLL_MISSES,
-    POLL_INTERVAL,
-    POWER_BOOT_TIME,
-    POWER_OFF_TIME,
 )
+from .models import KIND_ACTION, KIND_SOMFY, command_kind
+from .protocols import somfy
 from .store import RFStore
+from .transmitters import LearnError, LearnEvent, Transmitter, get_transmitter
 
 _LOGGER = logging.getLogger(__name__)
 
-BROADLINK = "broadlink"
-NOTIFICATION_ID = "rf_devices_broadlink_health"
+__all__ = ["LearnError", "LearnEvent", "RFHub", "capture_result"]
 
+# Seconds after one of our transmissions during which a receiver may still be
+# hearing it (repeats, receiver buffering): not a press of the original remote.
+ECHO_MARGIN = 1.5
 
-class LearnError(HomeAssistantError):
-    """Learning could not start or finish."""
-
-
-@dataclass
-class LearnEvent:
-    stage: str  # sweep | frequency | press | captured | timeout | error
-    data: dict[str, Any]
+SOMFY_INVERTED = {"up": "down", "down": "up", "my_up": "my_down", "my_down": "my_up"}
 
 
 class RFHub:
@@ -61,6 +49,10 @@ class RFHub:
         self._last_learn = 0.0
         self.calibrating = False
         self.relays: dict = {}  # device id -> RelayController
+        # Until when a receiver may be hearing our own transmission (loop.monotonic):
+        # the follower (listen.py) ignores what arrives before this.
+        self.echo_until = 0.0
+        self.follower = None  # listen.Follower when some device follows its remote
 
     @property
     def default_transmitter(self) -> str:
@@ -82,89 +74,125 @@ class RFHub:
         long press, so each transmission waits ``min_interval`` after the
         previous one finished.
         """
-        codec.decode(code)  # fail early on garbage
+        codec.ensure_usable(code)  # fail early on garbage
+        entity_id = transmitter or self.default_transmitter
+
+        async def send() -> None:
+            await self.transmitter(entity_id).async_send(code)
+
+        await self._async_transmit(entity_id, interval, send, fingerprint=_fingerprint(code))
+
+    async def async_send_command(
+        self,
+        device: dict,
+        cmd: dict,
+        hold: float = 0,
+        interval: float | None = None,
+    ) -> None:
+        """Send one stored command of ``device``, whatever its kind."""
+        kind = command_kind(cmd)
+        if kind == KIND_ACTION:
+            await self.async_call_action(cmd)
+        elif kind == KIND_SOMFY:
+            await self.async_send_somfy(device, cmd["button"], hold, interval)
+        else:
+            code = codec.hold(cmd["code"], hold) if hold else cmd["code"]
+            await self.async_send(code, self.transmitter_for(device), interval)
+
+    async def async_send_somfy(
+        self, device: dict, button: str, hold: float = 0, interval: float | None = None
+    ) -> None:
+        """Press a button of the device's Somfy virtual remote (new rolling code each time)."""
+        cfg = device.get("somfy")
+        if not cfg:
+            raise HomeAssistantError(f"{device.get('name')}: no Somfy remote configured")
+        if cfg.get("invert"):
+            button = SOMFY_INVERTED.get(button, button)
+        repeats = somfy.repeats_for(hold) if hold else int(cfg.get("repeats", somfy.DEFAULT_REPEATS))
+        address = int(cfg["address"])
+        entity_id = self.transmitter_for(device)
+        tx = self.transmitter(entity_id)
+
+        async def send() -> None:
+            # The counter moves forward (and is saved) inside the queue, so
+            # codes leave in order even when presses pile up.
+            code = await self.store.async_next_somfy_code(address)
+            timings = somfy.encode(address, button, code, repeats)
+            debug.trace(
+                self.hass, "somfy", transmitter=entity_id, address=f"{address:06X}",
+                button=button, rolling_code=code, repeats=repeats,
+            )
+            await tx.async_send_timings(timings, somfy.FREQUENCY_HZ)
+
+        await self._async_transmit(entity_id, interval, send, fingerprint=f"somfy:{address:06X}:{button}")
+
+    async def async_call_action(self, cmd: dict) -> None:
+        """A command that is a service call on another integration's entity."""
+        domain, service = cmd["service"].split(".", 1)
+        data = dict(cmd.get("data") or {})
+        if cmd.get("entity_id"):
+            data["entity_id"] = cmd["entity_id"]
+        error = None
+        try:
+            await self.hass.services.async_call(domain, service, data, blocking=True)
+        except Exception as err:
+            error = f"{type(err).__name__}: {err}"
+            raise
+        finally:
+            debug.trace(self.hass, "action", service=cmd["service"], data=data, error=error)
+
+    async def _async_transmit(self, entity_id: str, interval: float | None, send, fingerprint=None) -> None:
         if self.learning:
             raise HomeAssistantError("RF Devices is capturing a code; try again in a moment")
-        entity_id = transmitter or self.default_transmitter
         async with self._lock:
             pause = self.min_interval if interval is None else interval
             wait = self._last_send + pause - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
+            started = time.monotonic()
+            self.echo_until = float("inf")
+            error = None
             try:
-                await self.hass.services.async_call(
-                    "remote",
-                    "send_command",
-                    {"entity_id": entity_id, "command": [f"b64:{code}"]},
-                    blocking=True,
-                )
+                await send()
+            except Exception as err:
+                error = f"{type(err).__name__}: {err}"
+                raise
             finally:
                 self._last_send = time.monotonic()
+                self.echo_until = self._last_send + ECHO_MARGIN
+                debug.trace(
+                    self.hass, "send", transmitter=entity_id, fingerprint=fingerprint,
+                    took_ms=round((self._last_send - started) * 1000), error=error,
+                )
 
-    def _broadlink_device(self, transmitter: str):
-        """The core Broadlink integration's device object for a remote entity."""
-        entry_id = None
-        if (ent := er.async_get(self.hass).async_get(transmitter)) is not None:
-            if ent.platform == BROADLINK:
-                entry_id = ent.config_entry_id
-        if entry_id is None:
-            raise LearnError(f"{transmitter} is not a Broadlink remote")
-        data = self.hass.data.get(BROADLINK)
-        device = getattr(data, "devices", {}).get(entry_id) if data else None
-        if device is None or getattr(device, "api", None) is None:
-            raise LearnError("The Broadlink integration is not loaded for this remote")
-        if not hasattr(device.api, "find_rf_packet"):
-            raise LearnError("This Broadlink model cannot learn RF codes")
-        return device
+    def transmitter(self, entity_id: str | None = None) -> Transmitter:
+        return get_transmitter(self.hass, self, entity_id or self.default_transmitter)
 
-    def can_learn(self, transmitter: str) -> bool:
+    def learn_problem(self, entity_id: str) -> str | None:
+        """Why this transmitter cannot learn, or None if it can."""
         try:
-            self._broadlink_device(transmitter)
-        except LearnError:
-            return False
-        return True
+            return self.transmitter(entity_id).learn_problem()
+        except LearnError as err:
+            return str(err)
+
+    def can_learn(self, entity_id: str) -> bool:
+        return self.learn_problem(entity_id) is None
 
     @property
     def learning(self) -> bool:
         return self._learn_lock.locked()
-
-    async def _async_alive(self, device) -> bool:
-        """Ask the Broadlink to identify itself (a harmless discovery packet)."""
-        try:
-            await asyncio.wait_for(self.hass.async_add_executor_job(device.api.hello), HEALTH_TIMEOUT)
-        except Exception:  # noqa: BLE001 - any failure means "not answering"
-            return False
-        return True
 
     async def async_learn(
         self, transmitter: str | None = None, frequency: float | None = None
     ) -> AsyncIterator[LearnEvent]:
         """Learn one RF code, yielding progress for the UI.
 
-        Without ``frequency`` the Broadlink first sweeps: the button must be
-        held until the frequency is found, released, and pressed once more.
-        With a known frequency a single short press is enough.
-
-        Safeguards, because a Broadlink stuck in learning mode may stop
-        answering until it is power-cycled:
-
-        * only one capture at a time, with a pause between captures;
-        * the Broadlink must answer before learning starts;
-        * RF Devices sends nothing while a capture runs;
-        * every unfinished capture (timeout, error, cancelled) takes the
-          Broadlink out of learning mode;
-        * afterwards its health is checked, and if it stopped answering the
-          user is notified and, when configured, its plug is power-cycled.
+        Whatever the transmitter: only one capture at a time, a pause between
+        captures, and RF Devices sends nothing while a capture runs.
         """
-        from broadlink.exceptions import (
-            BroadlinkException,
-            NetworkTimeoutError,
-            ReadError,
-            StorageError,
-        )
-
-        transmitter = transmitter or self.default_transmitter
-        device = self._broadlink_device(transmitter)
+        tx = self.transmitter(transmitter)
+        if (problem := tx.learn_problem()) is not None:
+            raise LearnError(problem)
         if self._learn_lock.locked():
             raise LearnError("Another capture is already running")
 
@@ -172,123 +200,38 @@ class RFHub:
             wait = self._last_learn + LEARN_COOLDOWN - time.monotonic()
             if wait > 0:
                 await asyncio.sleep(wait)
-            if not await self._async_alive(device):
-                yield LearnEvent("error", {"reason": "unreachable", "message": "Broadlink not answering"})
-                self._last_learn = time.monotonic()
-                return
-            captured = False
+            debug.trace(self.hass, "learn_start", transmitter=tx.entity_id, frequency=frequency)
             try:
-                # Leave any learning mode a previous, interrupted capture left open.
-                await self._async_exit_learning(device)
-                if not frequency:
-                    await device.async_request(device.api.sweep_frequency)
-                    yield LearnEvent("sweep", {})
-                    for _ in range(LEARN_TIMEOUT):
-                        await asyncio.sleep(1)
-                        found, freq = await device.async_request(device.api.check_frequency)
-                        if found:
-                            # Some models (RM Pro+) report 0: found, but no value.
-                            frequency = freq or None
-                            break
-                    else:
-                        yield LearnEvent("timeout", {"during": "sweep"})
-                        return
-                    if frequency:
-                        await self.store.async_remember_frequency(transmitter, frequency)
-                    yield LearnEvent("frequency", {"frequency": frequency})
-                    await asyncio.sleep(1)
-
-                await device.async_request(device.api.find_rf_packet, frequency)
-                yield LearnEvent("press", {"frequency": frequency})
-                misses = 0
-                for _ in range(int(LEARN_TIMEOUT / POLL_INTERVAL)):
-                    # Same pace as the core integration: an RM Pro+ that is
-                    # listening copes badly with faster polling.
-                    await asyncio.sleep(POLL_INTERVAL)
-                    try:
-                        raw = await device.async_request(device.api.check_data)
-                    except (ReadError, StorageError):
-                        misses = 0
-                        continue
-                    except NetworkTimeoutError:
-                        # Busy receiving: give it a moment before giving up.
-                        misses += 1
-                        if misses > MAX_POLL_MISSES:
-                            raise
-                        await asyncio.sleep(POLL_INTERVAL)
-                        continue
-                    captured = True
-                    yield LearnEvent("captured", capture_result(codec.to_b64(raw), frequency))
-                    return
-                yield LearnEvent("timeout", {"during": "press"})
-            except (BroadlinkException, OSError) as err:
-                _LOGGER.warning("Learning failed: %s", err)
-                reason = "unreachable" if isinstance(err, (NetworkTimeoutError, OSError)) else None
-                yield LearnEvent("error", {"message": str(err), "reason": reason})
+                # Closing the inner generator runs its clean-up even when the
+                # UI unsubscribes while it is waiting at a yield.
+                async with aclosing(tx.async_learn(frequency)) as events:
+                    async for event in events:
+                        debug.trace(self.hass, "learn_" + event.stage, **_learn_summary(event.data))
+                        yield event
+            except BaseException as err:
+                debug.trace(self.hass, "learn_end", reason=type(err).__name__, message=str(err))
+                raise
             finally:
                 self._last_learn = time.monotonic()
-                if not captured:
-                    await self._async_exit_learning(device)
-                # Checked in the background so a closed subscription cannot skip it.
-                self.hass.async_create_background_task(
-                    self._async_after_learning(device), "rf_devices health check"
-                )
-
-    async def _async_exit_learning(self, device) -> None:
-        """Best effort: take the Broadlink out of RF sweep/learning mode."""
-        from broadlink.exceptions import BroadlinkException
-
-        try:
-            await device.async_request(device.api.cancel_sweep_frequency)
-        except (BroadlinkException, OSError) as err:
-            _LOGGER.debug("Could not exit learning mode: %s", err)
-
-    async def _async_after_learning(self, device) -> None:
-        """Make sure the Broadlink still answers after a capture; try to recover if not."""
-        await asyncio.sleep(HEALTH_DELAY)
-        if await self._async_alive(device):
-            return
-        _LOGGER.warning("Broadlink stopped answering after a capture, retrying")
-        await self._async_exit_learning(device)
-        await asyncio.sleep(HEALTH_DELAY)
-        if await self._async_alive(device):
-            return
-        power = self.entry.options.get(CONF_POWER_SWITCH)
-        if power and self.hass.states.get(power) is not None:
-            _LOGGER.warning("Power-cycling the Broadlink through %s", power)
-            await self.hass.services.async_call("homeassistant", "turn_off", {"entity_id": power}, blocking=True)
-            await asyncio.sleep(POWER_OFF_TIME)
-            await self.hass.services.async_call("homeassistant", "turn_on", {"entity_id": power}, blocking=True)
-            for _ in range(POWER_BOOT_TIME // 5):
-                await asyncio.sleep(5)
-                if await self._async_alive(device):
-                    persistent_notification.async_create(
-                        self.hass,
-                        "The Broadlink stopped answering after a capture and was restarted "
-                        f"by switching {power} off and on. It is working again.",
-                        title="RF Devices",
-                        notification_id=NOTIFICATION_ID,
-                    )
-                    return
-        persistent_notification.async_create(
-            self.hass,
-            "The Broadlink is not answering after a capture. Unplug it for a few seconds. "
-            "To make RF Devices do this automatically, plug it into a smart plug and choose "
-            "that plug in the RF Devices options.",
-            title="RF Devices",
-            notification_id=NOTIFICATION_ID,
-        )
 
 
-def capture_result(code: str, frequency: float | None) -> dict[str, Any]:
-    """Raw capture, its analysis and the cleaned version the UI proposes."""
-    analysis = codec.analyze(code)
-    cleaned = codec.clean(code) if analysis["needs_cleaning"] else code
+def _fingerprint(code: str) -> str | None:
+    try:
+        return codec.fingerprint(code)
+    except codec.CodecError:
+        return None
+
+
+def _learn_summary(data: dict) -> dict:
+    """What the trace keeps of a learning event: the codes, not the UI's analysis."""
+    if "raw" not in data:
+        return dict(data)
     return {
-        "frequency": frequency,
-        "raw": code,
-        "raw_analysis": analysis,
-        "code": cleaned,
-        "analysis": codec.analyze(cleaned),
-        "fingerprint": codec.fingerprint(code),
+        "frequency": data.get("frequency"),
+        "raw": data["raw"],
+        "code": data["code"],
+        "fingerprint": data.get("fingerprint"),
+        "frames": data["raw_analysis"]["frames"],
+        "good_frames": data["raw_analysis"]["good_frames"],
+        "bits": data["analysis"]["bits"],
     }

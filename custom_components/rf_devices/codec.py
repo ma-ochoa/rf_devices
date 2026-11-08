@@ -28,6 +28,10 @@ TYPE_IR = 0x26
 TYPE_RF433 = 0xB2
 TYPE_RF315 = 0xD7
 KINDS = {TYPE_IR: "ir", TYPE_RF433: "rf433", TYPE_RF315: "rf315"}
+# Some Broadlink apps store 433 MHz codes with this type byte and a huge repeat
+# count. The pulses inside are the remote's: ``clean`` turns them into a
+# normal 433 MHz code.
+TYPE_RF433_APP = 0xB1
 
 # A low pulse this long (or longer) separates two frames.
 MIN_GAP_US = 2500
@@ -35,6 +39,17 @@ MIN_GAP_US = 2500
 TAIL_GAP_TICKS = 1500
 
 DEFAULT_FRAMES = 4
+
+# A press never lasts this long, even held (``hold`` goes up to 10 s): a code
+# that does is not a remote's (e.g. something pasted with a wrong first byte).
+MAX_PRESS_MS = 15_000
+# Why a code cannot be stored or sent (``problem``).
+PROBLEM_NOT_RF_IR = "not_rf_ir"
+PROBLEM_TOO_LONG = "too_long"
+PROBLEM_CONVERTIBLE = "convertible"
+# A converted code needs this many identical frames of at least this length.
+MIN_CONVERT_FRAMES = 2
+MIN_CONVERT_PULSES = 16
 
 
 class CodecError(ValueError):
@@ -139,6 +154,62 @@ def to_b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
 
+# Pause inserted between two received bursts when the receiver reports them
+# separately (it drops the silence that split them). ESPHome's default idle
+# threshold is 10 ms, so the real pause was at least that long.
+RECEIVED_GAP_US = 10000
+# Received bursts shorter than this are receiver noise, not a remote frame.
+MIN_RECEIVED_PULSES = 16
+
+
+def kind_for_frequency(frequency_hz: float | None) -> int:
+    """Broadlink packet type for a carrier (433 MHz band unless it is near 315)."""
+    if frequency_hz and 300e6 <= frequency_hz < 350e6:
+        return TYPE_RF315
+    return TYPE_RF433
+
+
+def to_timings(code: str | bytes) -> tuple[list[int], int]:
+    """Signed microseconds (+on / −off) and repeat count, as HA's RF API wants them."""
+    packet = decode(code)
+    timings = [
+        round(p * TICK_US) * (1 if i % 2 == 0 else -1) for i, p in enumerate(packet.pulses)
+    ]
+    return timings, packet.repeat
+
+
+def from_timings(bursts: list[list[int]], kind: int = TYPE_RF433, repeat: int = 0) -> str:
+    """Build a Broadlink packet (base64) from received signed-microsecond bursts.
+
+    A receiver may deliver a remote's burst of repeated frames as one list
+    or one list per frame; either way the result looks like a Broadlink
+    capture, so ``analyze``/``clean`` treat both alike. Leading silences
+    are skipped, consecutive values of the same sign are merged, and a
+    pause is put between bursts that ended on an "on" pulse.
+    """
+    pulses_us: list[int] = []
+    for burst in bursts:
+        on = True  # the next value we expect
+        for value in burst:
+            if value == 0:
+                continue
+            is_on = value > 0
+            if not pulses_us and not is_on:
+                continue  # a packet starts with "on"
+            if pulses_us and is_on != on:
+                # Same sign twice in a row: merge into the previous pulse.
+                pulses_us[-1] += abs(value)
+                continue
+            pulses_us.append(abs(value))
+            on = not is_on
+        if pulses_us and len(pulses_us) % 2 == 1:
+            pulses_us.append(RECEIVED_GAP_US)  # close the burst with its pause
+    if not pulses_us:
+        raise CodecError("Nothing was received")
+    ticks = [max(1, round(us / TICK_US)) for us in pulses_us]
+    return to_b64(encode(Packet(kind, repeat, ticks)))
+
+
 def _describe(pulses: list[int]) -> tuple[str, str]:
     """Quantise pulses into short/long and read on-pulses as bits (long = 1)."""
     if not pulses:
@@ -172,6 +243,51 @@ def _dominant(frames: list[Frame]) -> tuple[str | None, list[Frame]]:
     return signature, [f for f in frames if f.signature == signature]
 
 
+def _converted(packet: Packet) -> Packet | None:
+    """The 433 MHz packet inside a ``TYPE_RF433_APP`` one, or None.
+
+    Only when it really holds a remote's message: the same frame, long enough
+    not to be noise, at least twice.
+    """
+    if packet.type != TYPE_RF433_APP:
+        return None
+    _, good = _dominant(split_frames(packet.pulses))
+    good = [f for f in good if f.gap is not None]
+    if len(good) < MIN_CONVERT_FRAMES or good[0].length < MIN_CONVERT_PULSES:
+        return None
+    return Packet(TYPE_RF433, 0, packet.pulses)
+
+
+def problem(code: str | bytes) -> str | None:
+    """Why a valid packet is still not a usable code, or None.
+
+    ``decode`` only checks the layout. A code pasted from another app can pass
+    it and still be junk: an unknown type byte, or a repeat count that would
+    keep the transmitter busy for minutes.
+    """
+    packet = decode(code)
+    if packet.type not in KINDS:
+        return PROBLEM_CONVERTIBLE if _converted(packet) else PROBLEM_NOT_RF_IR
+    if sum(packet.pulses) * TICK_US * (packet.repeat + 1) / 1000 > MAX_PRESS_MS:
+        return PROBLEM_TOO_LONG
+    return None
+
+
+def ensure_usable(code: str | bytes) -> None:
+    """Raise ``CodecError`` unless the code can be stored and sent."""
+    packet = decode(code)
+    reason = problem(code)
+    if reason == PROBLEM_CONVERTIBLE:
+        raise CodecError("Code in a Broadlink app's format: clean it to turn it into a normal 433 MHz code")
+    if reason == PROBLEM_NOT_RF_IR:
+        raise CodecError(f"Not an IR or RF code (type byte 0x{packet.type:02X}): learn the button again")
+    if reason == PROBLEM_TOO_LONG:
+        raise CodecError(
+            f"The code would take {sum(packet.pulses) * TICK_US * (packet.repeat + 1) / 1_000_000:.0f} s "
+            f"to send (repeat {packet.repeat}): learn the button again"
+        )
+
+
 def analyze(code: str | bytes) -> dict:
     """Describe a packet for the UI."""
     packet = decode(code)
@@ -198,7 +314,8 @@ def analyze(code: str | bytes) -> dict:
             {"pulses": f.length, "ok": f.signature == signature} for f in frames
         ],
     }
-    result["needs_cleaning"] = packet.is_rf and (
+    result["problem"] = problem(code)
+    result["needs_cleaning"] = result["problem"] == PROBLEM_CONVERTIBLE or packet.is_rf and (
         result["bad_frames"] > 0
         or packet.repeat > 0
         or len(good) > DEFAULT_FRAMES * 2
@@ -225,11 +342,13 @@ def clean(code: str | bytes, frames: int = DEFAULT_FRAMES, repeat: int = 0) -> s
 
     Returns the new code as base64 without the ``b64:`` prefix. IR packets and
     packets without a repeated frame are returned unchanged apart from the
-    repeat byte.
+    repeat byte. A code in a Broadlink app's format (``TYPE_RF433_APP``) comes
+    out as a normal 433 MHz one.
     """
     packet = decode(code)
     if frames < 1:
         raise CodecError("At least one frame is needed")
+    packet = _converted(packet) or packet
     if not packet.is_rf:
         return to_b64(encode(Packet(packet.type, repeat, packet.pulses)))
     all_frames = split_frames(packet.pulses)
@@ -274,3 +393,17 @@ def hold(code: str | bytes, seconds: float) -> str:
     repeat = -(-total // MAX_FRAMES_PER_PACKET) - 1
     per_packet = -(-total // (repeat + 1))
     return clean(code, frames=per_packet, repeat=repeat)
+
+
+def capture_result(code: str, frequency: float | None) -> dict:
+    """Raw capture, its analysis and the cleaned version the UI proposes."""
+    analysis = analyze(code)
+    cleaned = clean(code) if analysis["needs_cleaning"] else code
+    return {
+        "frequency": frequency,
+        "raw": code,
+        "raw_analysis": analysis,
+        "code": cleaned,
+        "analysis": analyze(cleaned),
+        "fingerprint": fingerprint(code),
+    }

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import secrets
 from typing import Any
 
 import voluptuous as vol
@@ -11,23 +13,45 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
-from . import codec
+from . import codec, debug
 from .calibration import async_calibrate, async_calibrate_light, read_watts
 from .const import DEVICE_TYPES, DOMAIN, MAX_SPEEDS, VERSION
 from .entity import find_by_unique_id
 from .hub import LearnError, RFHub, capture_result
+from .listen import follow_problem
 from .meter import Meter
 from .models import (
+    COMMAND_SCHEMA,
+    KIND_RF,
     LIGHT_SIDE_KEYS,
+    SOMFY_SCHEMA,
+    command_kind,
     entity_plan,
     missing_roles,
     registry_device_ids,
     roles,
     validate_device,
 )
+from .protocols import somfy
 from .relay import MODE_DETACHED, relay_mode
 from .relays import get_adapter
 from .store import async_read_broadlink_codes
+from .transmitters import DOMAINS as TRANSMITTER_DOMAINS
+
+# Stored fields of a command, whatever its kind (the UI adds its own on top).
+COMMAND_FIELDS = (
+    "kind", "code", "frequency", "learned", "label", "hold", "source",
+    "button", "service", "entity_id", "data",
+)
+
+# Domains whose entities a device can be linked to (another integration drives it).
+LINK_DOMAINS = {
+    "cover": ("cover",),
+    "light": ("light", "switch"),
+    "switch": ("switch", "light", "input_boolean"),
+    "fan": ("fan",),
+    "fan_light": ("light",),
+}
 
 
 @callback
@@ -48,6 +72,11 @@ def async_register(hass: HomeAssistant) -> None:
         ws_relay_info,
         ws_relay_apply,
         ws_meter_live,
+        ws_debug_report,
+        ws_command_send,
+        ws_somfy_new_address,
+        ws_somfy_decode,
+        ws_linkable,
     ):
         websocket_api.async_register_command(hass, handler)
 
@@ -63,12 +92,22 @@ def _describe(hass: HomeAssistant, hub: RFHub, device: dict) -> dict:
     """Device plus what the UI needs to show it."""
     commands = {}
     for role, cmd in device.get("commands", {}).items():
-        try:
-            analysis = codec.analyze(cmd["code"])
-            fp = codec.fingerprint(cmd["code"])
-        except codec.CodecError:
-            analysis, fp = None, None
+        analysis, fp = None, None
+        if command_kind(cmd) == KIND_RF:
+            with contextlib.suppress(codec.CodecError):
+                analysis = codec.analyze(cmd["code"])
+                fp = codec.fingerprint(cmd["code"])
         commands[role] = {**cmd, "analysis": analysis, "fingerprint": fp}
+    extra: dict[str, Any] = {}
+    if device.get("somfy"):
+        extra["somfy_code"] = hub.store.somfy_code(int(device["somfy"]["address"]))
+        try:
+            extra["somfy_note"] = hub.transmitter(hub.transmitter_for(device)).carrier_note(
+                somfy.FREQUENCY_HZ
+            )
+        except LearnError as err:
+            extra["somfy_note"] = str(err)
+    extra["follow_problem"] = follow_problem(hub, device)
     ent_reg = er.async_get(hass)
     entities, light_entities = [], []
     for platform, key in entity_plan(device):
@@ -91,6 +130,7 @@ def _describe(hass: HomeAssistant, hub: RFHub, device: dict) -> dict:
         "missing": missing_roles(device),
         "entities": entities,
         "light_entities": light_entities,
+        **extra,
     }
 
 
@@ -118,14 +158,23 @@ def ws_info(hass, connection, msg) -> None:
     except LearnError as err:
         _error(connection, msg, err)
         return
-    transmitters = [
-        {
-            "entity_id": s.entity_id,
-            "name": s.name,
-            "can_learn": hub.can_learn(s.entity_id),
-        }
-        for s in hass.states.async_all("remote")
-    ]
+    transmitters = []
+    for state in hass.states.async_all(TRANSMITTER_DOMAINS):
+        tx = hub.transmitter(state.entity_id)
+        problem = tx.learn_problem()
+        listen = tx.receiver_problem()
+        transmitters.append(
+            {
+                "entity_id": state.entity_id,
+                "name": state.name,
+                "can_learn": problem is None,
+                "learn_problem": problem,
+                "can_listen": listen is None,
+                "listen_problem": listen,
+                "sweeps": tx.sweeps,
+                "somfy_note": tx.carrier_note(somfy.FREQUENCY_HZ),
+            }
+        )
     connection.send_result(
         msg["id"],
         {
@@ -136,6 +185,7 @@ def ws_info(hass, connection, msg) -> None:
             "device_types": DEVICE_TYPES,
             "max_speeds": MAX_SPEEDS,
             "min_interval": hub.min_interval,
+            "somfy_buttons": list(somfy.BUTTONS),
         },
     )
 
@@ -154,6 +204,25 @@ def ws_devices(hass, connection, msg) -> None:
     )
 
 
+def _refuse_new_unusable_codes(device: dict, previous: dict | None) -> None:
+    """A code that is not IR/RF (or would send for minutes) cannot come in.
+
+    Only new or changed codes are checked: one already stored keeps the
+    device savable (the panel saves on every edit) and is flagged instead.
+    """
+    before = (previous or {}).get("commands", {})
+    for role, cmd in device["commands"].items():
+        if command_kind(cmd) != KIND_RF:
+            continue
+        for key in ("code", "source"):
+            code = cmd.get(key)
+            if code and code != (before.get(role) or {}).get(key):
+                try:
+                    codec.ensure_usable(code)
+                except codec.CodecError as err:
+                    raise vol.Invalid(f"{role}: {err}") from err
+
+
 @websocket_api.websocket_command(
     {vol.Required("type"): "rf_devices/device/save", vol.Required("device"): dict}
 )
@@ -165,10 +234,13 @@ async def ws_device_save(hass, connection, msg) -> None:
         data = dict(msg["device"])
         # The UI sends commands back with their analysis attached; keep only stored fields.
         data["commands"] = {
-            role: {k: v for k, v in cmd.items() if k in ("code", "frequency", "learned", "label", "hold", "source")}
+            role: {k: v for k, v in cmd.items() if k in COMMAND_FIELDS}
             for role, cmd in data.get("commands", {}).items()
         }
-        for key in ("roles", "missing", "entities", "light_entities", "ha_devices"):
+        for key in [k for k in data if k.startswith("_")]:
+            data.pop(key)  # the editor's own state
+        for key in ("roles", "missing", "entities", "light_entities", "ha_devices",
+                    "somfy_code", "somfy_note", "follow_problem"):
             data.pop(key, None)
         stale_check = "rev" in data
         validated = validate_device(data)
@@ -179,6 +251,7 @@ async def ws_device_save(hass, connection, msg) -> None:
             )
             return
         _refuse_own_sources(hass, validated)
+        _refuse_new_unusable_codes(validated, previous)
         await apply_relay_identity(hass, hub, previous, validated)
         device = await hub.store.async_upsert(validated)
     except (vol.Invalid, LearnError) as err:
@@ -226,8 +299,10 @@ def ws_learn(hass, connection, msg) -> None:
     try:
         hub = _hub(hass)
         transmitter = msg.get("transmitter") or hub.default_transmitter
-        hub._broadlink_device(transmitter)  # noqa: SLF001 - fail before subscribing
+        if (problem := hub.learn_problem(transmitter)) is not None:
+            raise LearnError(problem)  # fail before subscribing
     except LearnError as err:
+        debug.trace(hass, "learn_refused", transmitter=msg.get("transmitter"), message=str(err))
         _error(connection, msg, err)
         return
 
@@ -748,3 +823,128 @@ def ws_meter_live(hass, connection, msg) -> None:
     connection.send_result(msg["id"])
     task = hass.async_create_background_task(run(), "rf_devices meter live")
     connection.subscriptions[msg["id"]] = task.cancel
+
+
+@websocket_api.websocket_command({vol.Required("type"): "rf_devices/debug_report"})
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_debug_report(hass, connection, msg) -> None:
+    """Everything needed to debug remotely (see ``debug``), for the panel's download button."""
+    try:
+        hub = _hub(hass)
+    except LearnError as err:
+        _error(connection, msg, err)
+        return
+    connection.send_result(msg["id"], await debug.async_build_report(hass, hub))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "rf_devices/command/send",
+        # A saved device, or the editor's copy (it may not be saved yet).
+        vol.Optional("device_id"): str,
+        vol.Optional("device"): dict,
+        # The button to press: a role of the device, or a command given here.
+        vol.Optional("role"): str,
+        vol.Optional("command"): dict,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_command_send(hass, connection, msg) -> None:
+    """Test a button of any kind (captured code, Somfy, service call)."""
+    try:
+        hub = _hub(hass)
+        device = hub.store.devices.get(msg.get("device_id") or "") or {}
+        if draft := msg.get("device"):
+            device = {
+                "id": draft.get("id"),
+                "name": draft.get("name") or "",
+                "transmitter": draft.get("transmitter"),
+                "somfy": SOMFY_SCHEMA(draft["somfy"]) if draft.get("somfy") else None,
+            }
+        if "command" in msg:
+            cmd = COMMAND_SCHEMA({k: v for k, v in msg["command"].items() if k in COMMAND_FIELDS})
+        else:
+            cmd = device.get("commands", {}).get(msg.get("role") or "")
+            if cmd is None:
+                raise vol.Invalid("Nothing to send")
+        await hub.async_send_command(device, cmd, float(cmd.get("hold") or 0))
+    except Exception as err:  # noqa: BLE001 - reported to the UI
+        _error(connection, msg, err)
+        return
+    result = {}
+    if device.get("somfy"):
+        result["somfy_code"] = hub.store.somfy_code(int(device["somfy"]["address"]))
+    connection.send_result(msg["id"], result)
+
+
+@websocket_api.websocket_command({vol.Required("type"): "rf_devices/somfy/new_address"})
+@websocket_api.require_admin
+@callback
+def ws_somfy_new_address(hass, connection, msg) -> None:
+    """A random address no other device (nor a followed real remote) uses."""
+    try:
+        hub = _hub(hass)
+    except LearnError as err:
+        _error(connection, msg, err)
+        return
+    used = set()
+    for device in hub.store.devices.values():
+        if device.get("somfy"):
+            used.add(int(device["somfy"]["address"]))
+        used.update(int(a) for a in device.get("follow_somfy") or [])
+    used.update(int(a, 16) for a in hub.store.somfy_codes)
+    while True:
+        address = secrets.randbelow(somfy.MAX_ADDRESS) + 1
+        if address not in used:
+            break
+    connection.send_result(msg["id"], {"address": address})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "rf_devices/somfy/decode", vol.Required("code"): str}
+)
+@websocket_api.require_admin
+@callback
+def ws_somfy_decode(hass, connection, msg) -> None:
+    """Somfy frames in a captured code: tells the address of a real remote."""
+    try:
+        timings, _ = codec.to_timings(_strip(msg["code"]))
+    except codec.CodecError as err:
+        _error(connection, msg, err)
+        return
+    presses = sorted(set(somfy.decode(timings)), key=lambda p: p.rolling_code)
+    connection.send_result(
+        msg["id"],
+        [{"address": p.address, "hex": f"{p.address:06X}", "button": p.button,
+          "rolling_code": p.rolling_code} for p in presses],
+    )
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "rf_devices/linkable", vol.Required("kind"): str}
+)
+@websocket_api.require_admin
+@callback
+def ws_linkable(hass, connection, msg) -> None:
+    """Entities of other integrations a device of this kind can be linked to."""
+    domains = LINK_DOMAINS.get(msg["kind"], ())
+    ent_reg = er.async_get(hass)
+    result = []
+    for state in hass.states.async_all(domains):
+        entry = ent_reg.async_get(state.entity_id)
+        if entry is not None and entry.platform == DOMAIN:
+            continue  # our own entities
+        result.append(
+            {
+                "entity_id": state.entity_id,
+                "name": state.name,
+                "platform": entry.platform if entry else None,
+                "features": state.attributes.get("supported_features", 0),
+                "percentage_step": state.attributes.get("percentage_step"),
+                "preset_modes": state.attributes.get("preset_modes"),
+            }
+        )
+    result.sort(key=lambda e: (e["platform"] or "", e["name"]))
+    connection.send_result(msg["id"], result)

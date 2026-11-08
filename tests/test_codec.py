@@ -4,7 +4,7 @@ import pytest
 
 from custom_components.rf_devices import codec
 
-from .helpers import BITS_A, BITS_B, capture
+from .helpers import BITS_A, BITS_B, capture, frame
 
 
 def test_roundtrip() -> None:
@@ -93,3 +93,58 @@ def test_reclean_to_fewer_or_more_frames() -> None:
     # Back up from a single frame: the gap is estimated, never the closing silence.
     back = codec.split_frames(codec.decode(codec.clean(codec.clean(four, frames=1), frames=3)).pulses)
     assert len(back) == 3 and max(f.gap for f in back[:-1]) < codec.TAIL_GAP_TICKS
+
+
+def test_problem_flags_codes_that_are_not_a_remote() -> None:
+    """Reported by a user: a code pasted from another app was stored with an unknown
+    type byte and a repeat count that would have sent it for about 94 s."""
+    good = codec.clean(capture(BITS_A))
+    assert codec.problem(good) is None
+    codec.ensure_usable(good)
+    assert codec.analyze(good)["problem"] is None
+
+    alien = codec.to_b64(codec.encode(codec.Packet(0x52, 0, frame(BITS_A) + [245])))
+    assert codec.problem(alien) == codec.PROBLEM_NOT_RF_IR
+    with pytest.raises(codec.CodecError, match="0x52"):
+        codec.ensure_usable(alien)
+
+    endless = capture(BITS_A, frames=4, repeat=192, truncated=False)
+    assert codec.analyze(endless)["problem"] == codec.PROBLEM_TOO_LONG
+    with pytest.raises(codec.CodecError, match="repeat 192"):
+        codec.ensure_usable(endless)
+    # Cleaning makes it a normal press again…
+    assert codec.problem(codec.clean(endless)) is None
+    # …and the longest hold the panel offers is still fine.
+    assert codec.problem(codec.hold(good, 10)) is None
+
+
+def _app_code(bits: str | None, repeat: int = 192) -> str:
+    """A 433 MHz code as some Broadlink apps store it: type 0xB1, huge repeat count."""
+    pulses = codec.decode(capture(bits, frames=6)).pulses if bits else [7, 31, 12, 66, 9] * 4
+    return codec.to_b64(codec.encode(codec.Packet(codec.TYPE_RF433_APP, repeat, pulses)))
+
+
+def test_broadlink_app_codes_are_converted_by_cleaning() -> None:
+    """Reported by a user: a code copied from the Broadlink app (0xB1, repeat 192) held the
+    remote's frames; cleaning turns it into the same code a capture would give."""
+    app = _app_code(BITS_A)
+    assert codec.problem(app) == codec.PROBLEM_CONVERTIBLE
+    assert codec.analyze(app)["needs_cleaning"]
+    with pytest.raises(codec.CodecError, match="Broadlink app"):
+        codec.ensure_usable(app)
+
+    converted = codec.clean(app)
+    packet = codec.decode(converted)
+    assert (packet.type, packet.repeat) == (codec.TYPE_RF433, 0)
+    assert codec.problem(converted) is None
+    assert codec.analyze(converted)["bits"].startswith(BITS_A)
+    assert converted == codec.clean(capture(BITS_A))
+
+    # The panel's paste dialog proposes the converted code straight away.
+    result = codec.capture_result(app, None)
+    assert result["code"] == converted and result["analysis"]["problem"] is None
+
+    # Not a remote inside: stays refused, cleaning cannot make it usable.
+    junk = _app_code(None)
+    assert codec.problem(junk) == codec.PROBLEM_NOT_RF_IR
+    assert codec.problem(codec.clean(junk)) == codec.PROBLEM_NOT_RF_IR

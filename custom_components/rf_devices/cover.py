@@ -68,10 +68,17 @@ class RFCover(RFEntity, CoverEntity):
         self._close_time = float(opts.get("close_time") or 0)
         self._timed = self._open_time > 0 and self._close_time > 0
         self._attr_device_class = CoverDeviceClass(opts.get("device_class", "shutter"))
+        # A linked cover (ESPSomfy RTS…) knows its real position: copy it and
+        # let it do "go to 40 %" itself instead of timing the movement here.
+        self._linked = device.get("linked_entity") if device.get("mirror") else None
         features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
-        if self.code(ROLE_STOP):
+        if self.has_command(ROLE_STOP):
             features |= CoverEntityFeature.STOP
-            if self._timed:
+            if self._timed and not self._linked:
+                features |= CoverEntityFeature.SET_POSITION
+        if self._linked:
+            self._timed = False
+            if (self._linked or "").startswith("cover."):
                 features |= CoverEntityFeature.SET_POSITION
         self._attr_supported_features = features
         self._position: float | None = 100.0 if self._timed else None
@@ -192,7 +199,7 @@ class RFCover(RFEntity, CoverEntity):
 
     async def async_wall(self, which: int, pressed: bool) -> None:
         """A wall input changed: ``which`` is +1 for the only/up input, -1 for the down one."""
-        can_stop = bool(self.code(ROLE_STOP))
+        can_stop = self.has_command(ROLE_STOP)
         if not self._wall_maintained and not pressed:
             return  # a push button being released
         if not self._switch_close_entity:
@@ -209,7 +216,7 @@ class RFCover(RFEntity, CoverEntity):
 
     async def async_wall_step(self) -> None:
         """One wall input: stop while moving, else the other way than last time."""
-        if self._direction and self.code(ROLE_STOP):
+        if self._direction and self.has_command(ROLE_STOP):
             await self.async_stop_cover()
         elif self.is_closed or (self._position != 100 and self._last_direction < 0):
             await self.async_open_cover()
@@ -293,6 +300,8 @@ class RFCover(RFEntity, CoverEntity):
             self._own_at = time.monotonic()
             await self.async_send_role(ROLE_OPEN if direction > 0 else ROLE_CLOSE)
             self._last_direction = direction
+            if self._linked:
+                return  # the linked cover reports how it moves
             if not self._timed:
                 self._closed = direction < 0
                 if self._meter is None:
@@ -319,11 +328,50 @@ class RFCover(RFEntity, CoverEntity):
             self.async_write_ha_state()
 
     async def async_set_cover_position(self, **kwargs: Any) -> None:
+        if self._linked:
+            await self.hass.services.async_call(
+                "cover", "set_cover_position",
+                {"entity_id": self._linked, ATTR_POSITION: kwargs[ATTR_POSITION]}, blocking=True,
+            )
+            return
         target = float(kwargs[ATTR_POSITION])
         current = self._position if self._position is not None else 0
         if abs(target - current) < 1:
             return
         await self._async_go(1 if target > current else -1, target)
+
+    @callback
+    def mirror_state(self, state) -> None:
+        """Copy the linked cover: position, movement, open/closed."""
+        position = state.attributes.get("current_position")
+        if position is not None:
+            self._position = float(position)
+        else:
+            self._position = None
+            if state.state in ("open", "closed"):
+                self._closed = state.state == "closed"
+        self._direction = 1 if state.state == "opening" else -1 if state.state == "closing" else 0
+
+    async def async_follow_remote(self, role: str) -> bool:
+        """The original remote moved the cover: track it without sending."""
+        if role not in (ROLE_OPEN, ROLE_CLOSE, ROLE_STOP):
+            return False
+        if self._linked:
+            return True  # the linked cover reports it
+        async with self._lock:
+            await self._async_cancel_move()
+            if role != ROLE_STOP:
+                direction = 1 if role == ROLE_OPEN else -1
+                if self._timed:
+                    self._direction = direction
+                    self._move_task = self.hass.async_create_background_task(
+                        self._async_move(direction, 100 if direction > 0 else 0),
+                        f"rf_devices cover {self.entity_id}",
+                    )
+                else:
+                    self._closed = direction < 0
+            self.async_write_ha_state()
+        return True
 
     async def async_set_assumed_position(self, position: int) -> None:
         """Service handler: correct the estimate without transmitting."""

@@ -1,0 +1,97 @@
+# RF Devices · ESP32 with one CC1101 radio
+#
+# The radio listens at 433.92 MHz and sends at 433.92 MHz or, retuning just
+# for the transmission, at 433.42 MHz (Somfy RTS). Home Assistant sees two
+# transmitters, one per frequency; pick the 433.42 MHz one for Somfy devices.
+# Limitation: it can only LISTEN at 433.92 MHz, so it can follow fixed-code
+# remotes but not the original Somfy remotes (use two radios for that:
+# esp32-2x-cc1101.yaml).
+#
+# Needs ESPHome 2026.9 or newer and Home Assistant 2026.5 or newer.
+#
+# Wiring: CC1101 VCC -> 3V3, GND -> GND, SCK/MOSI/MISO -> SPI pins,
+# CSN -> cs pin, GDO0 -> send pin, GDO2 -> receive pin (pins below are for a
+# classic ESP32 DevKit; change them to your board's).
+
+substitutions:
+  name: rf-gateway
+  friendly_name: RF Gateway
+  spi_clk: GPIO18
+  spi_mosi: GPIO23
+  spi_miso: GPIO19
+  cs: GPIO21
+  gdo0: GPIO4
+  gdo2: GPIO16
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+spi:
+  clk_pin: ${spi_clk}
+  mosi_pin: ${spi_mosi}
+  miso_pin: ${spi_miso}
+
+cc1101:
+  id: radio
+  cs_pin: ${cs}
+  frequency: 433.92MHz
+
+remote_transmitter:
+  id: tx
+  pin: ${gdo0}
+  carrier_duty_percent: 100%
+  non_blocking: true
+  on_transmit:
+    - cc1101.begin_tx: radio
+  on_complete:
+    # Back to the listening frequency after a Somfy transmission.
+    - cc1101.set_frequency:
+        id: radio
+        value: 433.92MHz
+    - cc1101.begin_rx: radio
+
+remote_receiver:
+  id: rx
+  pin: ${gdo2}
+  filter: 100us
+  idle: 10ms
+
+radio_frequency:
+  # Each transmitter tunes the radio to its own frequency before sending.
+  - platform: ir_rf_proxy
+    name: "RF 433.92 MHz"
+    remote_transmitter_id: tx
+    frequency: 433.92MHz
+    on_control:
+      - cc1101.set_frequency:
+          id: radio
+          value: 433.92MHz
+  - platform: ir_rf_proxy
+    name: "RF 433.42 MHz (Somfy)"
+    remote_transmitter_id: tx
+    frequency: 433.42MHz
+    on_control:
+      - cc1101.set_frequency:
+          id: radio
+          value: 433.42MHz
+  - platform: ir_rf_proxy
+    name: "RF 433.92 MHz receiver"
+    remote_receiver_id: rx
+    frequency: 433.92MHz
