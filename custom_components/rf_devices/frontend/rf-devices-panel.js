@@ -312,6 +312,8 @@ const I18N = {
     needs_cleaning: "Captura sin limpiar: {frames} tramas, se envía {times} ({ms} ms). Pulsa Limpiar.",
     problem_not_rf_ir: "Esto no es un código IR ni RF (quizá se copió mal de otra aplicación). Vuelve a aprender el botón.",
     problem_too_long: "Este código tardaría {s} s en enviarse: no es una pulsación de un mando. Vuelve a aprender el botón.",
+    problem_convertible: "Código de 433 MHz en el formato de la app de Broadlink. Pulsa Limpiar para convertirlo.",
+    converted: "Código de la app de Broadlink convertido a un código normal de 433 MHz.",
     once: "1 vez",
     times: "{n} veces",
     duplicate: "Es el mismo código que «{other}».",
@@ -708,6 +710,8 @@ const I18N = {
     needs_cleaning: "Uncleaned capture: {frames} frames, sent {times} ({ms} ms). Press Clean.",
     problem_not_rf_ir: "This is not an IR or RF code (maybe copied wrongly from another app). Learn the button again.",
     problem_too_long: "This code would take {s} s to send: it is not a remote's press. Learn the button again.",
+    problem_convertible: "433 MHz code in a Broadlink app's format. Press Clean to convert it.",
+    converted: "Broadlink app code converted to a normal 433 MHz code.",
     once: "once",
     times: "{n} times",
     duplicate: "Same code as “{other}”.",
@@ -2424,7 +2428,7 @@ class RFDevicesPanel extends HTMLElement {
         const dup = has && c.fingerprint ? byFp[c.fingerprint].filter((r) => r !== role) : [];
         const warnings = [];
         if (a?.problem) warnings.push(this.problemText(a));
-        if (a?.needs_cleaning) warnings.push(this.t("needs_cleaning", { frames: a.frames, times: this.times(a.repeat), ms: a.sent_ms }));
+        if (a?.needs_cleaning && a.problem !== "convertible") warnings.push(this.t("needs_cleaning", { frames: a.frames, times: this.times(a.repeat), ms: a.sent_ms }));
         if (dup.length) warnings.push(this.t("duplicate", { other: dup.map((r) => this.roleLabel(r, d)).join(", ") }));
         const info = !has ? this.t("not_learned")
           : kind === "somfy" ? this.t("kind_somfy", { b: this.t("b_" + c.button) })
@@ -2515,6 +2519,7 @@ class RFDevicesPanel extends HTMLElement {
       return `<p class="warn-text">⚠ ${esc(this.problemText(r.analysis))}</p>
         ${retry ? `<div class="actions"><span class="spacer"></span><button data-action="start-learn">${this.t("retry")}</button></div>` : ""}`;
     return `
+      ${r.raw_analysis?.problem === "convertible" ? `<p class="sub">${esc(this.t("converted"))}</p>` : ""}
       ${differs && withRaw ? `<div class="res"><b>${this.t("raw_capture")}</b><div class="sub">${this.summary(r.raw_analysis)}</div>${this.wave(r.raw_analysis.sample_us, r.raw_analysis.frame_map)}</div>` : ""}
       <div class="res"><b>${differs ? this.t("cleaned") : this.t("raw_capture")}</b><div class="sub">${this.summary(r.analysis)}</div>${this.wave(r.analysis.sample_us, r.analysis.frame_map)}
         <div class="sub mono">${r.analysis.kind.toUpperCase()} · ${r.analysis.bits.length} bits · 0x${r.analysis.hex}</div></div>
