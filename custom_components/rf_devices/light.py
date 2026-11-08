@@ -52,7 +52,10 @@ async def async_setup_entry(
     setup_platform_entities(hass, entry, async_add_entities, "light", factory)
 
 
-LAMP_COMMAND_GRACE = 6.0  # s after our own light command: the lamp may not have lit yet
+# s after our own light command: the lamp may not have lit yet. Some lamps (or
+# a transmitter that is slow to emit) only show on the meter 8–9 s later; a
+# shorter grace made the state bounce on → off → on.
+LAMP_COMMAND_GRACE = 10.0
 LAMP_DRIFT_W = 1.0  # smaller changes are drift, not a switch
 LAMP_SETTLE_READS, LAMP_SETTLE_EVERY = 20, 0.5  # after a change: read until 2 agree
 LAMP_POLL_EVERY = 1.0  # live meters: seconds between readings
@@ -310,6 +313,23 @@ class RFFanLight(RFLight):
             _LOGGER.info("%s: live calibration of the lamp: %s -> %s W", self.entity_id, old, cal["light_modes"])
             self.device["rev"] = self.device.get("rev", 0) + 1
             self.hass.async_create_task(self.hub.store.async_save())
+
+    def _lamp_watts(self) -> float | None:
+        """The lamp's lowest draw (of its colour modes), from a calibration."""
+        opts = self.device["options"]
+        cal = opts.get("calibration") or opts.get("light_calibration")
+        if not cal:
+            return None
+        values = [w for w in (cal.get("light"), *(cal.get("light_modes") or [])) if w and w > 0]
+        return min(values) if values else None
+
+    def _motor_busy(self) -> bool:
+        fan = self._fan_state()
+        if fan is None or fan.state != "on":
+            return False
+        if self._lamp_watts() is None:
+            return True  # a plain threshold cannot tell the lamp from a running motor
+        return (dt_util.utcnow() - fan.last_changed).total_seconds() < FAN_QUIET_LIVE
 
     def _fan_entity_id(self) -> str | None:
         return er.async_get(self.hass).async_get_entity_id("fan", DOMAIN, f"{self.device['id']}_fan")

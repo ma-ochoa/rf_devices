@@ -386,6 +386,61 @@ class RFFan(RFEntity, FanEntity):
             self.async_write_ha_state()
 
     # --- corrections without sending --------------------------------------
+    @callback
+    def mirror_state(self, state) -> None:
+        """Copy the linked fan (another integration, e.g. ble_adv)."""
+        attrs = state.attributes
+        if state.state == "off":
+            self._set_off()
+        elif state.state == "on":
+            pct = attrs.get("percentage")
+            if pct:
+                self._last_speed = self._speed_of(int(pct))
+            self._attr_percentage = self._pct(self._last_speed)
+            preset = attrs.get("preset_mode")
+            self._attr_preset_mode = preset if preset in self._presets else None
+        if self._direction_mode != MODE_NONE and attrs.get("direction") in (
+            DIRECTION_FORWARD,
+            DIRECTION_REVERSE,
+        ):
+            self._attr_current_direction = attrs["direction"]
+
+    async def async_follow_remote(self, role: str) -> bool:
+        async with self._op_lock:
+            if role.startswith(SPEED_PREFIX) and role[len(SPEED_PREFIX):].isdigit():
+                speed = int(role[len(SPEED_PREFIX):])
+                self._last_speed = max(1, min(self._speeds, speed))
+                self._attr_percentage = self._pct(self._last_speed)
+                self._attr_preset_mode = None
+                self._own_speed = False
+            elif role == ROLE_OFF:
+                self._set_off()
+            elif role == ROLE_POWER:
+                if self.is_on:
+                    self._set_off()
+                else:
+                    self._attr_percentage = self._pct(self._last_speed)
+            elif role.startswith(PRESET_PREFIX) and role[len(PRESET_PREFIX):].isdigit():
+                index = int(role[len(PRESET_PREFIX):]) - 1
+                if not 0 <= index < len(self._presets):
+                    return False
+                self._attr_preset_mode = self._presets[index]
+                if not self._attr_percentage:
+                    self._attr_percentage = self._pct(self._last_speed)
+            elif role == ROLE_DIRECTION and self._direction_mode != MODE_NONE:
+                self._attr_current_direction = (
+                    DIRECTION_REVERSE if self._attr_current_direction == DIRECTION_FORWARD
+                    else DIRECTION_FORWARD
+                )
+            elif role in (ROLE_FORWARD, ROLE_REVERSE) and self._direction_mode != MODE_NONE:
+                self._attr_current_direction = (
+                    DIRECTION_FORWARD if role == ROLE_FORWARD else DIRECTION_REVERSE
+                )
+            else:
+                return False
+            self.async_write_ha_state()
+        return True
+
     async def async_set_assumed_state(self, is_on: bool, percentage: int | None = None) -> None:
         if not is_on:
             self._set_off()

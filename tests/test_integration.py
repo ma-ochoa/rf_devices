@@ -298,7 +298,7 @@ async def test_learn_cancel_stops_sweep(hass: HomeAssistant, setup, hass_ws_clie
 
 
 async def test_learn_press_timeout_exits_learning(hass: HomeAssistant, setup, hass_ws_client, monkeypatch) -> None:
-    monkeypatch.setattr("custom_components.rf_devices.hub.LEARN_TIMEOUT", 1)
+    monkeypatch.setattr("custom_components.rf_devices.transmitters.remote.LEARN_TIMEOUT", 1)
     api = MagicMock()
     api.check_data.side_effect = ReadError(-5, "no data")
     _fake_broadlink(hass, api)
@@ -373,9 +373,9 @@ async def test_no_transmission_during_capture(hass: HomeAssistant, setup, hass_w
 
 async def test_power_cycle_when_broadlink_hangs(hass: HomeAssistant, setup, monkeypatch) -> None:
     for name in ("HEALTH_DELAY", "POWER_OFF_TIME"):
-        monkeypatch.setattr(f"custom_components.rf_devices.hub.{name}", 0)
-    monkeypatch.setattr("custom_components.rf_devices.hub.POWER_BOOT_TIME", 5)
-    monkeypatch.setattr("custom_components.rf_devices.hub.asyncio.sleep", _no_sleep)
+        monkeypatch.setattr(f"custom_components.rf_devices.transmitters.remote.{name}", 0)
+    monkeypatch.setattr("custom_components.rf_devices.transmitters.remote.POWER_BOOT_TIME", 5)
+    monkeypatch.setattr("custom_components.rf_devices.transmitters.remote.asyncio.sleep", _no_sleep)
     hass.config_entries.async_update_entry(
         setup.entry, options={**setup.entry.options, "power_switch": "switch.plug"}
     )
@@ -393,8 +393,8 @@ async def test_power_cycle_when_broadlink_hangs(hass: HomeAssistant, setup, monk
         return True
 
     api.hello.side_effect = hello
-    hub = setup.entry.runtime_data
-    await hub._async_after_learning(SimpleNamespace(api=api, async_request=_request))
+    tx = setup.entry.runtime_data.transmitter(TX)
+    await tx._async_after_learning(SimpleNamespace(api=api, async_request=_request))
     assert [c.data["entity_id"] for c in offs] == ["switch.plug"]
     assert [c.data["entity_id"] for c in ons] == ["switch.plug"]
     api.cancel_sweep_frequency.assert_called_once()
@@ -414,7 +414,7 @@ async def _request(func, *args):
 async def test_learn_tolerates_a_busy_broadlink(hass: HomeAssistant, setup, hass_ws_client, monkeypatch) -> None:
     from broadlink.exceptions import NetworkTimeoutError
 
-    monkeypatch.setattr("custom_components.rf_devices.hub.POLL_INTERVAL", 0.05)
+    monkeypatch.setattr("custom_components.rf_devices.transmitters.remote.POLL_INTERVAL", 0.05)
     api = MagicMock()
     answers = [NetworkTimeoutError(-4000, "busy"), ReadError(-5, "no data"), NetworkTimeoutError(-4000, "busy"),
                codec.encode(codec.decode(capture(BITS_A)))]
@@ -549,3 +549,67 @@ async def test_cover_two_wall_push_buttons(hass, hass_storage) -> None:
     await press(up)
     assert hass.states.get("cover.persiana").state == "opening"
     await hass.services.async_call("cover", "stop_cover", {"entity_id": "cover.persiana"}, blocking=True)
+
+
+async def test_codes_that_are_not_a_remote_are_kept_out(
+    hass: HomeAssistant, setup, hass_ws_client, hass_storage
+) -> None:
+    """A junk code cannot come in through the panel, nor be sent; one already stored is flagged
+    but the device stays savable (the panel saves on every edit)."""
+    from .helpers import frame
+
+    alien = codec.to_b64(codec.encode(codec.Packet(0x52, 192, frame(BITS_A) + [245])))
+    ws = await hass_ws_client(hass)
+
+    await ws.send_json_auto_id({"type": "rf_devices/code/analyze", "code": alien})
+    r = (await ws.receive_json())["result"]
+    assert r["analysis"]["problem"] == codec.PROBLEM_NOT_RF_IR
+
+    await ws.send_json_auto_id({"type": "rf_devices/devices"})
+    fan = next(d for d in (await ws.receive_json())["result"] if d["id"] == "fan1")
+    fan["commands"]["x_bad"] = {"code": alien, "label": "Pegado"}
+    await ws.send_json_auto_id({"type": "rf_devices/device/save", "device": fan})
+    msg = await ws.receive_json()
+    assert not msg["success"] and "x_bad" in msg["error"]["message"]
+
+    await ws.send_json_auto_id({"type": "rf_devices/code/send", "code": alien})
+    assert not (await ws.receive_json())["success"]
+    assert _sent(setup.calls) == []
+
+    # Stored before this check existed (straight in the store): flagged, still savable.
+    store = setup.entry.runtime_data.store
+    store.devices["fan1"]["commands"]["x_bad"] = {"code": alien, "label": "Pegado"}
+    await ws.send_json_auto_id({"type": "rf_devices/devices"})
+    fan = next(d for d in (await ws.receive_json())["result"] if d["id"] == "fan1")
+    assert fan["commands"]["x_bad"]["analysis"]["problem"] == codec.PROBLEM_NOT_RF_IR
+    fan["name"] = "Ventilador salón"
+    await ws.send_json_auto_id({"type": "rf_devices/device/save", "device": fan})
+    msg = await ws.receive_json()
+    assert msg["success"], msg
+
+
+async def test_broadlink_app_codes_are_converted_in_the_panel(hass: HomeAssistant, setup, hass_ws_client) -> None:
+    """A 433 MHz code pasted from the Broadlink app (0xB1) is converted, not refused."""
+    ws = await hass_ws_client(hass)
+    pulses = codec.decode(capture(BITS_A, frames=6)).pulses
+    app = codec.to_b64(codec.encode(codec.Packet(codec.TYPE_RF433_APP, 192, pulses)))
+
+    await ws.send_json_auto_id({"type": "rf_devices/code/analyze", "code": app})
+    r = (await ws.receive_json())["result"]
+    assert r["raw_analysis"]["problem"] == codec.PROBLEM_CONVERTIBLE
+    assert r["analysis"]["problem"] is None and r["analysis"]["kind"] == "rf433"
+
+    # Already stored: the slot's «Clean» converts it.
+    await ws.send_json_auto_id({"type": "rf_devices/code/clean", "code": app})
+    cleaned = (await ws.receive_json())["result"]
+    assert cleaned["code"] == r["code"]
+
+    await ws.send_json_auto_id({"type": "rf_devices/devices"})
+    fan = next(d for d in (await ws.receive_json())["result"] if d["id"] == "fan1")
+    fan["commands"]["x_app"] = {"code": app, "label": "Pegado"}
+    await ws.send_json_auto_id({"type": "rf_devices/device/save", "device": fan})
+    msg = await ws.receive_json()
+    assert not msg["success"] and "clean it" in msg["error"]["message"]
+    fan["commands"]["x_app"] = {"code": cleaned["code"], "label": "Pegado"}
+    await ws.send_json_auto_id({"type": "rf_devices/device/save", "device": fan})
+    assert (await ws.receive_json())["success"]

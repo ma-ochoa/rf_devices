@@ -1,5 +1,123 @@
 # Changelog
 
+## 0.12.0
+
+Stable release of everything tried in the `labs` builds (0.12.0-labs.1 … labs.7, listed below):
+ESPHome `radio_frequency` transmitters and receivers (IoTorero / Athom RF-IR, ESP32 + CC1101),
+following the original remote, Somfy RTS, Home Assistant actions as commands, the *Diagnostics*
+report, noise filtering of cheap receivers and the checks on pasted codes. Now needs Home
+Assistant 2026.5 or newer (was 2026.3). Plus:
+
+- New, light tab: "Send the command again if the lamp does not respond". With a power meter,
+  every light command (panel, voice, wall switch) is checked on the meter; if the lamp did not
+  change within a few seconds (4 by default) the command is sent once more. An RF code is
+  sometimes missed, and the wall switch then seemed dead. A newer command cancels the check, and
+  nothing is resent while the fan is changing speed (or running, without a calibration).
+- Fixed: after an own light command the power reading could switch the light's state back too
+  early (on → off → on) with lamps that take 8–9 s to show on the meter. It now waits 10 s
+  instead of 6 s.
+
+## 0.12.0-labs.7 (test build, `labs` branch)
+
+- 433 MHz codes copied from the Broadlink app are converted instead of refused. Some Broadlink
+  apps store them with type byte `0xB1` and a repeat count of 192; labs.6 rejected them as "not
+  IR or RF", but the remote's frames are inside. Pasting one now proposes the converted code
+  (normal 433 MHz, the identical frames kept, repeat 0), and a button that already holds one
+  says "press Clean to convert it". Codes with that type byte and no repeated frame inside are
+  still refused.
+
+## 0.12.0-labs.6 (test build, `labs` branch)
+
+- Codes that are not a remote's are kept out. A code pasted from another app could pass the
+  format check and still be junk: an unknown type byte (not IR or RF), or a repeat count that
+  would keep the transmitter busy for over a minute (one user's would have sent for 94 s). The
+  panel now refuses such a code when it is pasted or picked from the Broadlink, saving refuses it
+  when it is new or changed, and sending refuses it with a clear error. A code already stored is
+  flagged on its button ("learn the button again") and the device can still be saved.
+
+## 0.12.0-labs.5 (test build, `labs` branch)
+
+- Fix: **receiver noise could be stored as a code** with an ESPHome receiver (Athom / IoTorero
+  RF-IR remote). Two noise bursts happened to read as the same short/long pattern (one wide
+  pulse made every other pulse "short"), so they counted as a repeated frame. A frame now also has
+  to be made of two clean pulse widths, short and long, as every fixed-code remote's is; a few
+  stray pulses (a header, a stretched first pulse) are still allowed. Found with a user's
+  *Diagnostics* report: all their real captures still pass, the noise one is now dropped. Codes
+  already stored are not changed: re-learn any button that does not work.
+
+## 0.12.0-labs.4 (test build, `labs` branch)
+
+- Fix: **captures with the Athom / IoTorero RF-IR remote ended in "nothing was received"** although
+  the remote was heard clearly. Its receiver reports carrier and silence swapped, so the pause
+  between two frames arrived as one long pulse and the burst looked like a single frame that never
+  repeated. Both polarities are now tried and the one where a frame repeats wins; codes are stored
+  and sent with the real polarity. Found with a user's *Diagnostics* report. The same applies to
+  following the original remote.
+
+## 0.12.0-labs.3 (test build, `labs` branch)
+
+- Fix: **a capture with an ESPHome receiver could take noise for the remote** (many "2-bit"
+  frames, most of them incomplete). A simple 433 MHz receiver also delivers stray pulses when
+  nothing is transmitting. Now only a run of pulses without long silences counts as a frame, and
+  a capture ends only when the same frame has been received at least twice, as a remote sends
+  it. Noise is dropped and the capture keeps waiting for the remote.
+- The *Diagnostics* trace marks the bursts dropped as noise and the captures discarded because
+  nothing repeated.
+
+## 0.12.0-labs.2 (test build, `labs` branch)
+
+Everything in this build is untested on real hardware: it is meant for users who try it and send
+the panel's *Diagnostics* report.
+
+- New: **three kinds of button**. Besides a captured RF code, a button can be a **Somfy RTS**
+  button or a **Home Assistant action** (a service call on any entity, with optional data).
+- New: **Somfy RTS** (generated). Each device gets its own 24-bit address and rolling code, kept
+  in the store apart from the devices and saved before every press. *Pair (PROG)*, "motor turns
+  the other way" and repeats per press in the panel. Sent at 433.42 MHz through a
+  `radio_frequency` transmitter; the panel warns when a transmitter can only do 433.92 MHz. The
+  counters travel with exports and never go back on import.
+- New: **devices driven by other integrations** (ESPSomfy RTS, ble_adv, ESPHome…). Link the
+  device to that integration's entity, fill the buttons with its actions in one click and copy
+  its state (cover position and movement, fan speed, preset and direction, on/off, a fan's
+  separate lamp). A linked cover passes "go to a position" straight to it.
+- New: **follow the original remote**. With an ESPHome RF receiver, RF Devices listens all the
+  time and applies the presses of the original remote without sending: stored fixed codes by
+  fingerprint, and real Somfy remotes by address (*Detect a Somfy remote*). Own transmissions
+  and captures are ignored. Every recognised press fires `rf_devices_remote`. The subscription
+  survives reconnections of the ESPHome device.
+- New: **ESP32 + CC1101** reference configs for ESPHome 2026.9+ (`docs/esphome`): two radios
+  (433.42 + 433.92 MHz, each sending and listening) or one radio that retunes to send Somfy.
+- With several radios on one ESPHome device, learning uses the receiver whose frequency matches
+  the transmitter.
+- Fix: **learning with an ESPHome receiver never started** in 0.12.0-labs.1 ("This ESPHome
+  device has no RF receiver"). Home Assistant keeps no record of RF receivers, only of
+  transmitters; RF Devices now asks the device itself for its receivers.
+- Fix: a **Broadlink's `radio_frequency` entity** could not learn ("Only ESPHome devices can
+  learn…"). It now learns the same way as the Broadlink's `remote` entity.
+- The *Diagnostics* report shows the RF receivers each ESPHome device lists.
+- Fix: saving a cover failed ("not a valid option at take_relay_entity_id").
+- Transmitters can send raw timings at a given frequency (`async_send_timings`); a Broadlink
+  gets them as a packet.
+
+- Includes everything in 0.11.9 of the main branch: the fix for saving blinds and "buttons only"
+  devices, timing a blind's travel from the panel, and its relay, wall buttons and power meter.
+
+## 0.12.0-labs.1 (test build)
+
+- New: **`radio_frequency` transmitters** (Home Assistant 2026.5+). Codes are sent as raw timings
+  through the core RF helper, so any RF adapter Home Assistant supports can be used, such as an
+  ESPHome `ir_rf_proxy` (Athom / IoTorero RF433-IR remote, firmware 3.0.8+).
+- New: **learning with an ESPHome RF receiver**. No frequency sweep: one press is enough.
+  Received bursts are joined, noise is dropped and the capture is cleaned like a Broadlink one.
+- Transmitters are now adapters (`transmitters/`), like relays. The Broadlink behaviour
+  (learning, safeguards, power-cycling) is unchanged.
+- Codes are still stored in the Broadlink format and are converted when sent through a
+  `radio_frequency` entity.
+- New: **Diagnostics** button in the panel. It downloads a report for remote debugging:
+  versions, transmitters and why each can or cannot learn, ESPHome devices with RF/IR, the
+  entities in use, the latest transmissions and captures (with every burst received) and recent
+  log lines. Home Assistant's own *Download diagnostics* now gives the same report.
+- Requires Home Assistant 2026.5 or newer.
 ## 0.11.9
 
 - Fixed: a blind/awning or a "buttons only" device could not be created or saved ("not a valid
