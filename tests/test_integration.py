@@ -586,3 +586,30 @@ async def test_codes_that_are_not_a_remote_are_kept_out(
     await ws.send_json_auto_id({"type": "rf_devices/device/save", "device": fan})
     msg = await ws.receive_json()
     assert msg["success"], msg
+
+
+async def test_broadlink_app_codes_are_converted_in_the_panel(hass: HomeAssistant, setup, hass_ws_client) -> None:
+    """A 433 MHz code pasted from the Broadlink app (0xB1) is converted, not refused."""
+    ws = await hass_ws_client(hass)
+    pulses = codec.decode(capture(BITS_A, frames=6)).pulses
+    app = codec.to_b64(codec.encode(codec.Packet(codec.TYPE_RF433_APP, 192, pulses)))
+
+    await ws.send_json_auto_id({"type": "rf_devices/code/analyze", "code": app})
+    r = (await ws.receive_json())["result"]
+    assert r["raw_analysis"]["problem"] == codec.PROBLEM_CONVERTIBLE
+    assert r["analysis"]["problem"] is None and r["analysis"]["kind"] == "rf433"
+
+    # Already stored: the slot's «Clean» converts it.
+    await ws.send_json_auto_id({"type": "rf_devices/code/clean", "code": app})
+    cleaned = (await ws.receive_json())["result"]
+    assert cleaned["code"] == r["code"]
+
+    await ws.send_json_auto_id({"type": "rf_devices/devices"})
+    fan = next(d for d in (await ws.receive_json())["result"] if d["id"] == "fan1")
+    fan["commands"]["x_app"] = {"code": app, "label": "Pegado"}
+    await ws.send_json_auto_id({"type": "rf_devices/device/save", "device": fan})
+    msg = await ws.receive_json()
+    assert not msg["success"] and "clean it" in msg["error"]["message"]
+    fan["commands"]["x_app"] = {"code": cleaned["code"], "label": "Pegado"}
+    await ws.send_json_auto_id({"type": "rf_devices/device/save", "device": fan})
+    assert (await ws.receive_json())["success"]

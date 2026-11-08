@@ -28,6 +28,10 @@ TYPE_IR = 0x26
 TYPE_RF433 = 0xB2
 TYPE_RF315 = 0xD7
 KINDS = {TYPE_IR: "ir", TYPE_RF433: "rf433", TYPE_RF315: "rf315"}
+# Some Broadlink apps store 433 MHz codes with this type byte and a huge repeat
+# count. The pulses inside are the remote's: ``clean`` turns them into a
+# normal 433 MHz code.
+TYPE_RF433_APP = 0xB1
 
 # A low pulse this long (or longer) separates two frames.
 MIN_GAP_US = 2500
@@ -42,6 +46,10 @@ MAX_PRESS_MS = 15_000
 # Why a code cannot be stored or sent (``problem``).
 PROBLEM_NOT_RF_IR = "not_rf_ir"
 PROBLEM_TOO_LONG = "too_long"
+PROBLEM_CONVERTIBLE = "convertible"
+# A converted code needs this many identical frames of at least this length.
+MIN_CONVERT_FRAMES = 2
+MIN_CONVERT_PULSES = 16
 
 
 class CodecError(ValueError):
@@ -235,6 +243,21 @@ def _dominant(frames: list[Frame]) -> tuple[str | None, list[Frame]]:
     return signature, [f for f in frames if f.signature == signature]
 
 
+def _converted(packet: Packet) -> Packet | None:
+    """The 433 MHz packet inside a ``TYPE_RF433_APP`` one, or None.
+
+    Only when it really holds a remote's message: the same frame, long enough
+    not to be noise, at least twice.
+    """
+    if packet.type != TYPE_RF433_APP:
+        return None
+    _, good = _dominant(split_frames(packet.pulses))
+    good = [f for f in good if f.gap is not None]
+    if len(good) < MIN_CONVERT_FRAMES or good[0].length < MIN_CONVERT_PULSES:
+        return None
+    return Packet(TYPE_RF433, 0, packet.pulses)
+
+
 def problem(code: str | bytes) -> str | None:
     """Why a valid packet is still not a usable code, or None.
 
@@ -244,7 +267,7 @@ def problem(code: str | bytes) -> str | None:
     """
     packet = decode(code)
     if packet.type not in KINDS:
-        return PROBLEM_NOT_RF_IR
+        return PROBLEM_CONVERTIBLE if _converted(packet) else PROBLEM_NOT_RF_IR
     if sum(packet.pulses) * TICK_US * (packet.repeat + 1) / 1000 > MAX_PRESS_MS:
         return PROBLEM_TOO_LONG
     return None
@@ -254,6 +277,8 @@ def ensure_usable(code: str | bytes) -> None:
     """Raise ``CodecError`` unless the code can be stored and sent."""
     packet = decode(code)
     reason = problem(code)
+    if reason == PROBLEM_CONVERTIBLE:
+        raise CodecError("Code in a Broadlink app's format: clean it to turn it into a normal 433 MHz code")
     if reason == PROBLEM_NOT_RF_IR:
         raise CodecError(f"Not an IR or RF code (type byte 0x{packet.type:02X}): learn the button again")
     if reason == PROBLEM_TOO_LONG:
@@ -290,7 +315,7 @@ def analyze(code: str | bytes) -> dict:
         ],
     }
     result["problem"] = problem(code)
-    result["needs_cleaning"] = packet.is_rf and (
+    result["needs_cleaning"] = result["problem"] == PROBLEM_CONVERTIBLE or packet.is_rf and (
         result["bad_frames"] > 0
         or packet.repeat > 0
         or len(good) > DEFAULT_FRAMES * 2
@@ -317,11 +342,13 @@ def clean(code: str | bytes, frames: int = DEFAULT_FRAMES, repeat: int = 0) -> s
 
     Returns the new code as base64 without the ``b64:`` prefix. IR packets and
     packets without a repeated frame are returned unchanged apart from the
-    repeat byte.
+    repeat byte. A code in a Broadlink app's format (``TYPE_RF433_APP``) comes
+    out as a normal 433 MHz one.
     """
     packet = decode(code)
     if frames < 1:
         raise CodecError("At least one frame is needed")
+    packet = _converted(packet) or packet
     if not packet.is_rf:
         return to_b64(encode(Packet(packet.type, repeat, packet.pulses)))
     all_frames = split_frames(packet.pulses)

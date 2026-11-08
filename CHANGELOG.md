@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.0-labs.7 (test build, `labs` branch)
+
+- 433 MHz codes copied from the Broadlink app are converted instead of refused. Some Broadlink
+  apps store them with type byte `0xB1` and a repeat count of 192; labs.6 rejected them as "not
+  IR or RF", but the remote's frames are inside. Pasting one now proposes the converted code
+  (normal 433 MHz, the identical frames kept, repeat 0), and a button that already holds one
+  says "press Clean to convert it". Codes with that type byte and no repeated frame inside are
+  still refused.
+
 ## 0.12.0-labs.6 (test build, `labs` branch)
 
 - Codes that are not a remote's are kept out. A code pasted from another app could pass the
