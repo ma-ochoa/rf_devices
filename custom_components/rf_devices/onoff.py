@@ -23,6 +23,8 @@ RETRY_DEFAULT_AFTER = 4.0  # s for the lamp to show on the meter before resendin
 RETRY_MIN_JUMP_W = 3.0  # a smaller change on the meter is not the lamp
 RETRY_MIN_SHOW = 2.5  # s a lamp needs to show a code on the meter; never resend sooner
 RETRY_MAX = 3  # resends left for one command (one automatic, one more per "again")
+RETRY_LAMP_FRACTION = 0.2  # a lamp is lit from this share of its draw: LED lamps start up slowly
+RETRY_MOVING_W = 0.5  # W between two readings 0.5 s apart: the meter is still moving, do not judge
 
 
 @dataclass
@@ -242,7 +244,9 @@ class OnOffMixin(RFEntity):
     def _lamp_is_on(self, watts: float) -> bool:
         """Whether the meter shows the lamp lit (the motor is not changing: see _motor_busy)."""
         if (lamp := self._lamp_watts()) is not None:
-            return watts >= max(RETRY_MIN_JUMP_W, lamp / 2)
+            # Not half of its draw: the lamp of the bedroom takes ~3 s to reach full power
+            # (7, 10, 27 W) and, judged at 4 s, a lamp that had reacted looked ignored.
+            return watts >= max(RETRY_MIN_JUMP_W, lamp * RETRY_LAMP_FRACTION)
         return watts > self._threshold
 
     @property
@@ -265,17 +269,22 @@ class OnOffMixin(RFEntity):
         to show the previous code, so two codes never cancel each other out).
         """
         loop = self.hass.loop
+        previous: float | None = None
         try:
             while self._pending is pending:
                 await asyncio.sleep(RETRY_EVERY)
                 if not self.powered or self.hub.calibrating or self._motor_busy():
                     return
                 watts = await pending.meter.async_read()
+                moving = watts is not None and previous is not None and abs(watts - previous) > RETRY_MOVING_W
+                previous = watts if watts is not None else previous
                 # Confirmed when the lamp is as it was asked to be. Not "it changed since
                 # before the command": with a toggle code, two quick commands (on, then
                 # off) change nothing on the meter, and resending would flip the lamp.
                 if watts is not None and self._lamp_is_on(watts) == pending.target:
                     return
+                if moving:
+                    continue  # still starting up or fading: wait for it to settle before judging
                 wait = RETRY_MIN_SHOW if pending.urgent else self._retry_after
                 if loop.time() < pending.last_send + wait:
                     continue

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.12.3
+
+- Fixed: a lamp that starts up slowly (the bedroom lamp takes ~3 s to reach full power) was taken for
+  a missed code when it was checked 4 s after the command, so a toggle was resent and switched it
+  off again. A lamp now counts as lit from a fifth of its draw (it was half), and the check does not
+  judge while the meter is still moving by more than 0.5 W between two readings.
+
 ## 0.12.2
 
 - Fixed: switching a light on and off in quick succession (an automation, the app, two voice
