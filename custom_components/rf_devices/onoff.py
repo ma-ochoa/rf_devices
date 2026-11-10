@@ -189,9 +189,20 @@ class OnOffMixin(RFEntity):
         meter = self._retry_meter()
         # The reading before the lamp can react, taken while the code goes out.
         before = self.hass.async_create_task(meter.async_read()) if meter else None
-        await self.async_send_role(role)
+        # Show the new state when the code starts going out: the transmitter takes
+        # 0.5-1 s to send it and everything that follows the entity (the mirror,
+        # automations, the app) should not wait for that. If it fails, go back.
+        previous = self._attr_is_on
         self._attr_is_on = on
         self.async_write_ha_state()
+        try:
+            await self.async_send_role(role)
+        except BaseException:
+            if before is not None:
+                before.cancel()
+            self._attr_is_on = previous
+            self.async_write_ha_state()
+            raise
         if meter is not None and before is not None:
             baseline = await before
             if baseline is not None:
@@ -224,10 +235,11 @@ class OnOffMixin(RFEntity):
         """A motor on the same meter is changing speed: the meter cannot tell."""
         return False
 
-    def _lamp_changed(self, before: float, after: float) -> bool:
+    def _lamp_is_on(self, watts: float) -> bool:
+        """Whether the meter shows the lamp lit (the motor is not changing: see _motor_busy)."""
         if (lamp := self._lamp_watts()) is not None:
-            return abs(after - before) >= max(RETRY_MIN_JUMP_W, lamp / 2)
-        return (before > self._threshold) != (after > self._threshold)
+            return watts >= max(RETRY_MIN_JUMP_W, lamp / 2)
+        return watts > self._threshold
 
     @property
     def command_unconfirmed(self) -> bool:
@@ -255,8 +267,11 @@ class OnOffMixin(RFEntity):
                 if not self.powered or self.hub.calibrating or self._motor_busy():
                     return
                 watts = await pending.meter.async_read()
-                if watts is not None and self._lamp_changed(pending.baseline, watts):
-                    return  # confirmed
+                # Confirmed when the lamp is as it was asked to be. Not "it changed since
+                # before the command": with a toggle code, two quick commands (on, then
+                # off) change nothing on the meter, and resending would flip the lamp.
+                if watts is not None and self._lamp_is_on(watts) == pending.target:
+                    return
                 wait = RETRY_MIN_SHOW if pending.urgent else self._retry_after
                 if loop.time() < pending.last_send + wait:
                     continue

@@ -756,12 +756,68 @@ async def test_received_light_command_is_not_repeated(hass, hass_storage, monkey
 
 
 async def test_new_command_replaces_the_check(hass, hass_storage, monkeypatch) -> None:
+    """The first code is lost, the second one (a toggle) lights the lamp: off was asked, so it is fixed."""
     t = await _retry_setup(hass, hass_storage, monkeypatch, light_retry=True)
     t.room.drop_next_light = True
     await call(hass, "light", "turn_on", LIGHT)
-    await call(hass, "light", "turn_off", LIGHT)  # before the check ends: no resend of the first
+    await call(hass, "light", "turn_off", LIGHT)  # no resend of the first; the check now wants "off"
     await _settle(hass)
+    assert t.room.rf == ["light", "light", "light"]  # the third puts the lamp as asked
+    assert not t.room.light and hass.states.get(LIGHT).state == "off"
+
+
+async def test_quick_on_then_off_is_not_resent(hass, hass_storage, monkeypatch) -> None:
+    """Both codes arrive, but the lamp is lit for an instant and the meter shows nothing.
+
+    Judging by "did the reading change" would call that a missed code and resend a toggle,
+    switching the lamp on again. Judging by the state that was asked for does not.
+    """
+    t = await _retry_setup(hass, hass_storage, monkeypatch, light_retry=True)
+    publish = t.room.publish
+    t.room.publish = lambda: None  # the meter lags: it never shows the lamp lit
+    await call(hass, "light", "turn_on", LIGHT)
+    await call(hass, "light", "turn_off", LIGHT)
+    t.room.publish = publish
+    t.room.publish()
+    await _settle(hass, 0.6)
     assert t.room.rf == ["light", "light"]
+    assert not t.room.light and hass.states.get(LIGHT).state == "off"
+
+
+async def test_state_is_shown_before_the_code_finishes_sending(hass, hass_storage, monkeypatch) -> None:
+    """The transmitter takes ~0.5 s: the entity must not wait for it."""
+    t = await _retry_setup(hass, hass_storage, monkeypatch)
+    gate = asyncio.Event()
+    from custom_components.rf_devices import hub as hub_mod
+
+    original = hub_mod.RFHub.async_send_command
+
+    async def slow(self, *args, **kwargs):
+        await gate.wait()
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(hub_mod.RFHub, "async_send_command", slow)
+    task = hass.async_create_task(call(hass, "light", "turn_on", LIGHT))
+    await asyncio.sleep(0.1)
+    assert hass.states.get(LIGHT).state == "on"  # shown while the code is still going out
+    gate.set()
+    await task
+    await _settle(hass, 0.2)
+    assert t.room.rf == ["light"] and hass.states.get(LIGHT).state == "on"
+
+
+async def test_state_goes_back_if_the_send_fails(hass, hass_storage, monkeypatch) -> None:
+    from custom_components.rf_devices import hub as hub_mod
+
+    await _retry_setup(hass, hass_storage, monkeypatch)
+
+    async def broken(self, *args, **kwargs):
+        raise HomeAssistantError("transmitter down")
+
+    monkeypatch.setattr(hub_mod.RFHub, "async_send_command", broken)
+    with pytest.raises(HomeAssistantError):
+        await call(hass, "light", "turn_on", LIGHT)
+    assert hass.states.get(LIGHT).state == "off"
 
 
 async def test_light_retry_is_off_by_default(hass, hass_storage, monkeypatch) -> None:
