@@ -27,6 +27,24 @@ BROADLINK = "broadlink"
 NOTIFICATION_ID = "rf_devices_broadlink_health"
 
 
+def _in_mro(err: BaseException, *names: str) -> bool:
+    """Whether the error is (a subclass of) a class with one of these names.
+
+    Matched by name, not by class: since Home Assistant 2026.11 the Broadlink integration
+    uses the ``broadlink-async`` library, whose exceptions are not the ones of the
+    ``broadlink`` package, so ``except ReadError`` never caught the "no code yet" answer.
+    """
+    return any(cls.__name__ in names for cls in type(err).__mro__)
+
+
+def _is_broadlink_error(err: BaseException) -> bool:
+    """An error of whichever Broadlink library the core integration uses."""
+    return isinstance(err, OSError) or any(
+        cls.__module__.split(".")[0].startswith("broadlink") or cls.__name__ == "BroadlinkException"
+        for cls in type(err).__mro__
+    )
+
+
 class RemoteTransmitter(Transmitter):
     """Sends through ``remote.send_command`` with a ``b64:`` Broadlink packet.
 
@@ -100,13 +118,6 @@ class RemoteTransmitter(Transmitter):
         The hub adds the rest: one capture at a time, a pause between
         captures and nothing sent while a capture runs.
         """
-        from broadlink.exceptions import (
-            BroadlinkException,
-            NetworkTimeoutError,
-            ReadError,
-            StorageError,
-        )
-
         device = self._device()
         if not await self._async_alive(device):
             yield LearnEvent("error", {"reason": "unreachable", "message": "Broadlink not answering"})
@@ -142,23 +153,27 @@ class RemoteTransmitter(Transmitter):
                 await asyncio.sleep(POLL_INTERVAL)
                 try:
                     raw = await device.async_request(device.api.check_data)
-                except (ReadError, StorageError):
-                    misses = 0
-                    continue
-                except NetworkTimeoutError:
-                    # Busy receiving: give it a moment before giving up.
-                    misses += 1
-                    if misses > MAX_POLL_MISSES:
-                        raise
-                    await asyncio.sleep(POLL_INTERVAL)
-                    continue
+                except Exception as err:  # noqa: BLE001 - sorted by name below
+                    if _in_mro(err, "ReadError", "StorageError"):
+                        misses = 0  # nothing captured yet
+                        continue
+                    if _in_mro(err, "NetworkTimeoutError"):
+                        # Busy receiving: give it a moment before giving up.
+                        misses += 1
+                        if misses > MAX_POLL_MISSES:
+                            raise
+                        await asyncio.sleep(POLL_INTERVAL)
+                        continue
+                    raise
                 captured = True
                 yield LearnEvent("captured", codec.capture_result(codec.to_b64(raw), frequency))
                 return
             yield LearnEvent("timeout", {"during": "press"})
-        except (BroadlinkException, OSError) as err:
+        except Exception as err:
+            if not _is_broadlink_error(err):
+                raise
             _LOGGER.warning("Learning failed: %s", err)
-            reason = "unreachable" if isinstance(err, (NetworkTimeoutError, OSError)) else None
+            reason = "unreachable" if isinstance(err, OSError) or _in_mro(err, "NetworkTimeoutError") else None
             yield LearnEvent("error", {"message": str(err), "reason": reason})
         finally:
             if not captured:
@@ -170,11 +185,9 @@ class RemoteTransmitter(Transmitter):
 
     async def _async_exit_learning(self, device) -> None:
         """Best effort: take the Broadlink out of RF sweep/learning mode."""
-        from broadlink.exceptions import BroadlinkException
-
         try:
             await device.async_request(device.api.cancel_sweep_frequency)
-        except (BroadlinkException, OSError) as err:
+        except Exception as err:  # noqa: BLE001 - best effort
             _LOGGER.debug("Could not exit learning mode: %s", err)
 
     async def _async_after_learning(self, device) -> None:

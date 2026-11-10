@@ -267,6 +267,53 @@ async def test_learn_with_known_frequency(hass: HomeAssistant, setup, hass_ws_cl
     assert ev["raw_analysis"]["frames"] == 13
 
 
+# Home Assistant 2026.11 moved the Broadlink integration to ``broadlink-async``: its exceptions are
+# not the ones of the ``broadlink`` package, they only share the names.
+class BroadlinkException(Exception):  # noqa: N818
+    pass
+
+
+BroadlinkException.__module__ = "broadlink_async.exceptions"
+ForeignReadError = type("ReadError", (BroadlinkException,), {})
+ForeignTimeout = type("NetworkTimeoutError", (BroadlinkException,), {})
+
+
+async def test_learn_with_foreign_error_classes(hass: HomeAssistant, setup, hass_ws_client) -> None:
+    """"No code yet" and "busy" come as other classes with the same names: still polled, not fatal."""
+    api = MagicMock()
+    raw = codec.decode(capture(BITS_A, frames=12))
+    answers = [ForeignReadError(-10, "Read error"), ForeignTimeout(-4000, "busy"), ForeignReadError(-10, "Read error"),
+               codec.encode(raw)]
+
+    def check_data():
+        a = answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return a
+
+    api.check_data.side_effect = check_data
+    _fake_broadlink(hass, api)
+
+    ws = await hass_ws_client(hass)
+    await ws.send_json_auto_id({"type": "rf_devices/learn", "frequency": 433.92})
+    assert (await ws.receive_json()).get("success")
+    stages, ev = await _stages(ws)
+    assert stages == ["press", "captured"], ev
+
+
+async def test_learn_with_a_foreign_fatal_error_is_reported(hass: HomeAssistant, setup, hass_ws_client) -> None:
+    api = MagicMock()
+    api.sweep_frequency.side_effect = type("AuthenticationError", (BroadlinkException,), {})(-1, "Authentication failed")
+    _fake_broadlink(hass, api)
+
+    ws = await hass_ws_client(hass)
+    await ws.send_json_auto_id({"type": "rf_devices/learn"})
+    assert (await ws.receive_json()).get("success")
+    stages, ev = await _stages(ws)
+    assert stages == ["error"] and "Authentication" in ev["message"]
+    api.cancel_sweep_frequency.assert_called()  # left the learning mode
+
+
 async def test_learn_with_sweep_remembers_frequency(hass: HomeAssistant, setup, hass_ws_client) -> None:
     api = MagicMock()
     api.check_frequency.side_effect = [(False, 0.0), (True, 433.92)]
