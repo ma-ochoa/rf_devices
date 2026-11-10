@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.4
+
+- Fixed: after the relay powered up, a lamp that was lighting by itself could be switched off. The
+  lamp of a fan lights about 3 s after the relay, and the meter shows partial values (7, 10 W) on the
+  way to its full draw; a calibrated reading of 7 W counted as "no light", so a toggle was sent to a
+  lamp that was lighting and switched it off (and a second one switched it on again). Now the meter is
+  watched for the whole wait (6 s plus 1 s) and only a lamp that draws nothing at all gets the RF
+  code. If it lights by itself, no RF is sent at all.
+
 ## 0.12.3
 
 - Fixed: a lamp that starts up slowly (the bedroom lamp takes ~3 s to reach full power) was taken for
