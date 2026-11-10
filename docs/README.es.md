@@ -72,7 +72,8 @@ crecer:
 
 ## Requisitos
 
-- Home Assistant **2026.5** o posterior (probado en 2026.9).
+- Home Assistant **2026.11** o posterior (probado en 2026.11). Desde la 2026.10.2 la integración Broadlink del núcleo usa la
+  librería `broadlink-async`; RF Devices habla con ella directamente y ya no instala el paquete `broadlink`.
 - Un emisor, uno de estos:
   - la integración oficial **Broadlink** con un modelo con RF. RF Devices emite a través de su
     entidad `remote` y usa su conexión para aprender;
