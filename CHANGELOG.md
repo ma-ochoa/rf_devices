@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.12.2
+
+- Fixed: switching a light on and off in quick succession (an automation, the app, two voice
+  commands) could make it blink on its own a few seconds later. The check that resends a missed
+  code compared the meter with its reading from before the command; with a toggle code, "on" then
+  "off" changes nothing on the meter (the lamp is lit for an instant and the meter lags), so the
+  second command looked ignored and a third toggle was sent. The check now compares the meter with
+  the state that was asked for, and if the lamp is not like that it resends, so it also puts a
+  lamp right when an earlier code was lost.
+- Changed: the light's state is shown as soon as its code starts going out, not when the
+  transmitter finishes (0.5-1 s later with a Broadlink RM). Whatever follows the entity (the app,
+  automations, indicators) reacts at once. If the transmission fails, the state goes back.
+
 ## 0.12.1
 
 - Fixed: flipping the wall switch again because the light "did nothing" could leave it as it was.
