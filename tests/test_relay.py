@@ -766,6 +766,7 @@ async def _retry_setup(hass, hass_storage, monkeypatch, **options):
 
     monkeypatch.setattr(onoff, "RETRY_EVERY", 0.02)
     monkeypatch.setattr(onoff, "RETRY_DEFAULT_AFTER", 0.2)
+    monkeypatch.setattr(onoff, "RETRY_SETTLE_FLOOR", 0)
     return await _setup(hass, hass_storage, monkeypatch, relay_mode="detached", **options)
 
 
@@ -841,6 +842,49 @@ async def test_slow_starting_lamp_is_not_taken_for_a_missed_code(hass, hass_stor
     assert t.room.rf == ["light"] and t.room.light and hass.states.get(LIGHT).state == "on"
 
 
+def _lagging_meter(hass, t, seconds: float) -> None:
+    """The meter shows what the lamp did ``seconds`` late (a Shelly Gen1 takes 2.5-4 s)."""
+
+    def publish() -> None:
+        watts = ((37.0 if t.room.light else 0.0) + 3.5 * t.room.speed) if t.room.relay else 0.0
+        hass.loop.call_later(seconds, hass.states.async_set, METER, str(watts), {"unit_of_measurement": "W"})
+
+    t.room.publish = publish
+
+
+async def test_the_meter_is_ignored_until_it_has_caught_up(hass, hass_storage, monkeypatch) -> None:
+    """The lamp obeys at once, the meter shows it late: on then off stays off, nothing is resent.
+
+    The setting asks for a check after 0.1 s but the meter lags 0.9 s, so the floor (1.2 s)
+    applies: until then the state is the commands given, whatever the meter shows.
+    """
+    from custom_components.rf_devices import onoff
+
+    t = await _retry_setup(hass, hass_storage, monkeypatch, light_retry=True, light_retry_after=0.1)
+    monkeypatch.setattr(onoff, "RETRY_SETTLE_FLOOR", 1.2)
+    _lagging_meter(hass, t, 0.9)
+    await call(hass, "light", "turn_on", LIGHT)
+    await call(hass, "light", "turn_off", LIGHT)
+    await _settle(hass, 2.5)
+    assert t.room.rf == ["light", "light"]
+    assert not t.room.light and hass.states.get(LIGHT).state == "off"
+
+
+async def test_an_old_reading_that_matches_does_not_end_the_check(hass, hass_storage, monkeypatch) -> None:
+    """Off is asked and its code is lost; the meter, late, still shows the old "off": not a confirmation.
+
+    The check waits for the meter to catch up, sees the lamp lit and sends off again.
+    """
+    t = await _retry_setup(hass, hass_storage, monkeypatch, light_retry=True, light_retry_after=1.0)
+    _lagging_meter(hass, t, 0.5)
+    await call(hass, "light", "turn_on", LIGHT)
+    t.room.drop_next_light = True  # the off code is lost: the lamp stays lit
+    await call(hass, "light", "turn_off", LIGHT)
+    await _settle(hass, 2.5)
+    assert t.room.rf == ["light", "light", "light"]
+    assert not t.room.light and hass.states.get(LIGHT).state == "off"
+
+
 async def test_state_is_shown_before_the_code_finishes_sending(hass, hass_storage, monkeypatch) -> None:
     """The transmitter takes ~0.5 s: the entity must not wait for it."""
     t = await _retry_setup(hass, hass_storage, monkeypatch)
@@ -906,6 +950,7 @@ async def _timing_setup(hass, hass_storage, monkeypatch, **options):
 
     monkeypatch.setattr(onoff, "RETRY_EVERY", 0.02)
     monkeypatch.setattr(onoff, "RETRY_DEFAULT_AFTER", 0.6)
+    monkeypatch.setattr(onoff, "RETRY_SETTLE_FLOOR", 0)
     monkeypatch.setattr(onoff, "RETRY_MIN_SHOW", 0.15)
     return await _setup(hass, hass_storage, monkeypatch, relay_mode="detached", light_retry=True, **options)
 
