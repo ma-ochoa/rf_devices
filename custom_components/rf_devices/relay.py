@@ -61,7 +61,7 @@ FAN_POWER_WINDOW = 10.0  # s: a relay power-up this soon after one done for the 
 # a tested fan lamp takes ~2 s to light; a "light on" sent to a toggle-only lamp
 # that was about to light would switch it off, so wait well past that and
 # confirm with a second reading.
-LAMP_ON_WAIT = 3.0
+LAMP_ON_WAIT = 6.0  # the bedroom lamp lights ~3 s after the relay; wait well past it
 LAMP_CONFIRM_GAP = 1.0
 LIGHT_CHECK_RETRIES = 2
 CHECK_EVERY = dt.timedelta(minutes=1)  # idle-off check
@@ -236,27 +236,43 @@ class RelayController:
     async def _async_ensure_lamp_on(self, since: float) -> None:
         """The relay just powered up: the lamp should be on; if not, switch it on by RF.
 
-        Lamps without memory light by themselves; lamps with memory stay as
-        they were. Checked on the meter (live when possible), twice at most.
+        Lamps without memory light by themselves (the bedroom lamp takes ~3 s after the
+        relay); lamps with memory stay as they were. Only a lamp that stays completely
+        dark for the whole wait gets the RF code: a toggle sent to a lamp that was about to
+        light would switch it off. Any draw at all counts as "it is lighting".
         """
         meter = Meter(self.hass, self.meter)
-        await asyncio.sleep(self.power_up_delay + LAMP_ON_WAIT)
+        wait = self.power_up_delay + LAMP_ON_WAIT + LAMP_CONFIRM_GAP
         for _ in range(LIGHT_CHECK_RETRIES):
+            if await self._async_lamp_lights_by_itself(meter, since, wait):
+                return
             light = self.light()
-            if light is None or not self.powered or getattr(light, "user_off_at", 0) >= since:
-                return  # power cut again, or someone asked for the light off meanwhile
-            watts = await meter.async_read()
-            if watts is None or self._lamp_seen(watts):
+            if light is None or not self.powered:
                 return
-            await asyncio.sleep(LAMP_CONFIRM_GAP)  # still dark a moment later?
-            watts = await meter.async_read()
-            if watts is None or self._lamp_seen(watts) or not self.powered:
-                return
-            _LOGGER.info("%s: relay on but the lamp stayed off (%s W), switching it on", self.device["name"], watts)
+            _LOGGER.info("%s: relay on but the lamp stayed dark, switching it on", self.device["name"])
             role = light._roles["toggle"] if light._toggle_mode else light._roles["on"]  # noqa: SLF001
             await light.async_send_role(role)
             await light.async_set_assumed_state(True)
-            await asyncio.sleep(LIGHT_CHECK_DELAY)
+            wait = LIGHT_CHECK_DELAY + LAMP_CONFIRM_GAP
+
+    async def _async_lamp_lights_by_itself(self, meter: Meter, since: float, seconds: float) -> bool:
+        """Watch the meter for ``seconds``: True when the lamp draws something, or there is nothing to do.
+
+        A level that is not clearly "lit" (a lamp starting up shows 7, 10 W on the way to
+        27 W) is not dark either, so only a flat idle reading all the way means no light.
+        """
+        threshold = float(self.device["options"].get("light_state_threshold") or 3.0)
+        deadline = self.hass.loop.time() + seconds
+        while True:
+            light = self.light()
+            if light is None or not self.powered or getattr(light, "user_off_at", 0) >= since:
+                return True  # power cut again, or someone asked for the light off meanwhile
+            watts = await meter.async_read()
+            if watts is None or watts > threshold:
+                return True
+            if self.hass.loop.time() >= deadline:
+                return False
+            await asyncio.sleep(READY_POLL)
 
     @callback
     def schedule_light_check(self) -> None:

@@ -513,6 +513,41 @@ async def test_slow_lamp_is_not_switched_off_by_mistake(hass, hass_storage, monk
     assert t.room.light and t.room.rf == []
 
 
+async def test_lamp_starting_with_a_partial_reading_is_not_switched_off(hass, hass_storage, monkeypatch) -> None:
+    """The meter shows 7 W, then 10 W, on its way to the lamp's draw: that is not a dark lamp.
+
+    The bedroom lamp lights ~3 s after the relay and the meter averages the first second;
+    a classification of 7 W as "motor, no light" made the plugin send a toggle to a lamp
+    that was lighting, which switched it off (the "no enciende" of 10/11).
+    """
+    cal = {"idle": 0.0, "light": 37.0, "speeds": [[3.0, 40.0], [5.2, 42.2]], "speeds_down": [3.0, 5.1],
+           "light_modes": [37.0], "settle": 1.0, "direct": True}
+    t = await _setup(hass, hass_storage, monkeypatch, relay_mode="coupled", power_up_delay=0.01,
+                     light_state_threshold=3.0, speeds=2, calibration=cal)
+    monkeypatch.setattr(relay_mod, "LAMP_ON_WAIT", 0.3)
+    monkeypatch.setattr(relay_mod, "LAMP_CONFIRM_GAP", 0.05)
+    real_turn_on = t.room.relay_call
+
+    async def slow_lamp(call):
+        await real_turn_on(call)
+        if call.service == "turn_on":
+            t.room.light = False
+            t.room.publish()
+
+            async def lights_later():
+                await asyncio.sleep(0.2)
+                hass.states.async_set(METER, "7.0", {"unit_of_measurement": "W"})  # partial reading
+                await asyncio.sleep(0.4)  # still starting when the old check gave up
+                t.room.light = True
+                t.room.publish()
+
+            hass.async_create_task(lights_later())
+
+    hass.services.async_register("homeassistant", "turn_on", slow_lamp)
+    await _cut_and_restore(hass, t.room)
+    assert t.room.light and t.room.rf == []
+
+
 async def test_mode_b_confirms_every_press_to_the_fallback_script(hass, hass_storage, monkeypatch) -> None:
     t = await _setup(hass, hass_storage, monkeypatch, relay_mode="detached", fallback_script=True)
     ctrl = t.entry.runtime_data.relays["terr"]
