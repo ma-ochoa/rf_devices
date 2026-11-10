@@ -265,8 +265,15 @@ class RelayController:
         deadline = self.hass.loop.time() + seconds
         while True:
             light = self.light()
-            if light is None or not self.powered or getattr(light, "user_off_at", 0) >= since:
-                return True  # power cut again, or someone asked for the light off meanwhile
+            if (
+                light is None
+                or not self.powered
+                or getattr(light, "user_off_at", 0) >= since
+                or getattr(light, "sent_at", float("-inf")) >= since
+            ):
+                # Power cut again, or someone asked for the light meanwhile (HA, a wall flip):
+                # from then on the lamp is the commands' business, a toggle here would undo them.
+                return True
             watts = await meter.async_read()
             if watts is None or watts > threshold:
                 return True
