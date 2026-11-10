@@ -148,14 +148,18 @@ class OnOffMixin(RFEntity):
     async def _async_set(self, on: bool | None) -> None:
         """Set the state; ``None`` flips it. Serialised so fast flips stay in step."""
         pending = self._pending
-        if pending is not None and (on is None or on == pending.target):
-            # Asked again before the lamp showed the last command on the meter:
-            # people press again because "nothing happened". That means insist,
-            # never "switch back" (two toggles would leave the lamp as it was).
+        if pending is not None and on is not None and on == pending.target:
+            # The same state asked for again before the lamp showed the last command on
+            # the meter (an automation or a voice command repeating itself): insist on it,
+            # never send a second toggle that would cancel the first.
             pending.resends = min(RETRY_MAX, pending.resends + 1)
             pending.urgent = True
             _LOGGER.debug("%s: asked again while unconfirmed; insisting on %s", self.entity_id, pending.target)
             return
+        # A flip (``on is None``, the wall switch) is a new request to change the light, even if
+        # the last command is not confirmed yet: the person sees the state change at once and
+        # flips to switch it back. The check that follows aims at the new state, so a lost code
+        # is resent by itself and the lamp ends up as the last flip says.
         self._cancel_retry()  # a different command replaces the check of the previous one
         async with self._op_lock:
             if on is None:

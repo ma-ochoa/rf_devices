@@ -853,34 +853,38 @@ async def _timing_setup(hass, hass_storage, monkeypatch, **options):
     return await _setup(hass, hass_storage, monkeypatch, relay_mode="detached", light_retry=True, **options)
 
 
-async def test_flip_while_unconfirmed_insists(hass, hass_storage, monkeypatch) -> None:
-    """Nothing happened, so the wall is flipped again: insist, never toggle back."""
+async def test_flip_while_unconfirmed_is_a_new_request(hass, hass_storage, monkeypatch) -> None:
+    """The wall is flipped again before the first code shows on the meter: the lamp follows the last flip.
+
+    The first code is lost, so the second one (a toggle) lights the lamp. The check that follows
+    aims at the state the last flip asked for ("off") and puts the lamp right by itself.
+    """
     t = await _timing_setup(hass, hass_storage, monkeypatch)
     t.room.drop_next_light = True
     await _flip(hass)
-    await _flip(hass)  # at once: it must not send a second toggle right away
-    assert t.room.rf == ["light"]
-    await _settle(hass, 0.4)  # resent once the lamp had time to show the first
-    assert t.room.rf == ["light", "light"]
-    assert t.room.light and hass.states.get(LIGHT).state == "on"
+    await _flip(hass)
+    assert t.room.rf == ["light", "light"]  # the second flip is sent at once, not swallowed
+    await _settle(hass, 0.8)
+    assert t.room.rf == ["light", "light", "light"]  # the check resent it: the lamp was lit, off was asked
+    assert not t.room.light and hass.states.get(LIGHT).state == "off"
 
 
-async def test_flip_right_after_a_received_resend_sends_nothing(hass, hass_storage, monkeypatch) -> None:
-    """The 00:38:57 case: an automatic resend and a flip one second apart cancelled out."""
+async def test_flip_right_after_a_received_resend_toggles_back(hass, hass_storage, monkeypatch) -> None:
+    """An automatic resend was received but is not on the meter yet, and the wall is flipped: off."""
     from custom_components.rf_devices import onoff
 
     t = await _timing_setup(hass, hass_storage, monkeypatch)
-    monkeypatch.setattr(onoff, "RETRY_MIN_SHOW", 0.5)  # longer than the lamp takes to show
+    monkeypatch.setattr(onoff, "RETRY_MIN_SHOW", 0.5)
     publish = t.room.publish
     t.room.publish = lambda: hass.loop.call_later(0.3, publish)  # the lamp shows ~0.3 s late
     t.room.drop_next_light = True
     await _flip(hass)
     await _settle(hass, 0.7)  # the automatic resend went out and was received, not yet seen
     assert t.room.rf == ["light", "light"] and t.room.light
-    await _flip(hass)  # "it did not work": but it just did
-    await _settle(hass, 0.6)
-    assert t.room.rf == ["light", "light"] and t.room.light
-    assert hass.states.get(LIGHT).state == "on"
+    await _flip(hass)  # the lamp is lit and the person wants it off
+    await _settle(hass, 0.8)
+    assert t.room.rf == ["light", "light", "light"]
+    assert not t.room.light and hass.states.get(LIGHT).state == "off"
 
 
 async def test_flip_after_the_lamp_reacted_toggles(hass, hass_storage, monkeypatch) -> None:

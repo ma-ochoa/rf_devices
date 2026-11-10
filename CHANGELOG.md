@@ -9,6 +9,11 @@
   second command looked ignored and a third toggle was sent. The check now compares the meter with
   the state that was asked for, and if the lamp is not like that it resends, so it also puts a
   lamp right when an earlier code was lost.
+- Changed: flipping the wall switch while the previous light command is not confirmed yet is now
+  a new request to change the light (0.12.1 took it as "insist" and ignored it, so a quick
+  on-off-on left the lamp lit and needed one more flip). The check aims at the state the last flip
+  asked for, so a lost code is still resent by itself. Asking for the same state again (an
+  automation repeating itself) still insists instead of sending a second toggle.
 - Changed: the light's state is shown as soon as its code starts going out, not when the
   transmitter finishes (0.5-1 s later with a Broadlink RM). Whatever follows the entity (the app,
   automations, indicators) reacts at once. If the transmission fails, the state goes back.
