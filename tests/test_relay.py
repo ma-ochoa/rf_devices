@@ -885,6 +885,51 @@ async def test_an_old_reading_that_matches_does_not_end_the_check(hass, hass_sto
     assert not t.room.light and hass.states.get(LIGHT).state == "off"
 
 
+@pytest.mark.parametrize("seed", [1, 2, 3, 4, 5, 10112026])
+async def test_flips_end_with_the_lamp_as_the_last_flip_said(hass, hass_storage, monkeypatch, seed) -> None:
+    """Quick flips, a meter that lags and codes that get lost: the lamp, the meter and HA agree at the end.
+
+    A lost code is never lost twice in a row here (one automatic resend and one more are allowed).
+    """
+    import random
+
+    t = await _retry_setup(hass, hass_storage, monkeypatch, light_retry=True, light_retry_after=0.5)
+    _lagging_meter(hass, t, 0.3)
+    rng = random.Random(seed)
+    lost = 0
+    real_rf = t.room.rf_call
+
+    async def flaky_rf(call):
+        nonlocal lost
+        if rng.random() < 0.35 and lost < 2:
+            lost += 1
+            t.room.drop_next_light = True
+        else:
+            lost = 0
+        await real_rf(call)
+
+    hass.services.async_register("remote", "send_command", flaky_rf)
+    for _ in range(9):
+        await _flip(hass)
+        await asyncio.sleep(rng.choice((0.05, 0.2, 0.45)))
+    await _settle(hass, 3.5)
+    assert hass.states.get(LIGHT).state == ("on" if t.room.light else "off")  # HA shows what the lamp is
+    assert t.room.light  # nine flips from off: the last one asked for "on"
+
+
+async def test_power_up_check_leaves_the_lamp_alone_after_a_command(hass, hass_storage, monkeypatch) -> None:
+    """A flip right after the relay was powered: the "switch it on" of the power-up check must not follow."""
+    t = await _setup(hass, hass_storage, monkeypatch, relay_mode="coupled", power_up_delay=0.01)
+    monkeypatch.setattr(relay_mod, "LAMP_ON_WAIT", 0.3)
+    t.room.memory = True  # the lamp stays dark after power-up: the check would send its own code
+    t.room.remembered = False
+    await _cut_and_restore(hass, t.room)
+    await call(hass, "light", "turn_on", LIGHT)  # a command in the middle of the check
+    await asyncio.sleep(0.8)
+    await hass.async_block_till_done()
+    assert t.room.rf.count("light") <= 1
+
+
 async def test_state_is_shown_before_the_code_finishes_sending(hass, hass_storage, monkeypatch) -> None:
     """The transmitter takes ~0.5 s: the entity must not wait for it."""
     t = await _retry_setup(hass, hass_storage, monkeypatch)

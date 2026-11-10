@@ -345,6 +345,7 @@ class RFFanLight(RFLight):
     def _lamp_quiet_left(self) -> float:
         """Seconds until readings can be trusted: after our own command or a fan change."""
         own = LAMP_COMMAND_GRACE - (self.hass.loop.time() - max(self.user_on_at, self.user_off_at, self.sent_at))
+        own = max(own, self.command_quiet_left())
         fan = self._fan_state()
         quiet = FAN_QUIET_LIVE if self._meter_live else FAN_QUIET
         motor = quiet - (dt_util.utcnow() - fan.last_changed).total_seconds() if fan else 0
@@ -392,7 +393,7 @@ class RFFanLight(RFLight):
         """
         if self.hub.calibrating or self._op_lock.locked() or on == self._attr_is_on:
             return
-        if self.hass.loop.time() - self.sent_at < LAMP_COMMAND_GRACE:
+        if self.hass.loop.time() - self.sent_at < LAMP_COMMAND_GRACE or self.command_quiet_left() > 0:
             return
         self._attr_is_on = on
         self.async_write_ha_state()

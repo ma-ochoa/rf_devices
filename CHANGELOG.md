@@ -11,6 +11,12 @@
   read, once it stops moving: if the lamp is as the last command left it, nothing is sent; if
   not, the code is sent again. A late reading that happens to match no longer ends the check early.
   Asking for the same state again still waits 4.5 s (it was 2.5 s) before judging.
+- Fixed: while that check is pending the meter no longer moves the entity: the direct meter feedback
+  and the lamp aligner of calibrated lamps both stay quiet until the check has judged (a late reading
+  used to flip the state back and forth). If the lamp still does not follow after the resends (two
+  automatic ones), the entity shows it as it is, at once.
+- Fixed: the "switch the lamp on" of the power-up check no longer follows a command that was given
+  after the relay was powered (a wall flip 2 s after power-up used to be undone by it).
 
 ## 0.13.0
 

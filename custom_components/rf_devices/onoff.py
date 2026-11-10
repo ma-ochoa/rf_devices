@@ -40,7 +40,7 @@ class _Pending:
     baseline: float  # meter reading before the code went out
     meter: Meter
     last_send: float  # loop time the code last went out
-    resends: int = 1
+    resends: int = 2  # tries after the first: each one only after a whole wait for the meter
     urgent: bool = False  # someone asked again: resend as soon as it is safe
     sending: bool = False
     task: asyncio.Task | None = field(default=None, repr=False)
@@ -137,8 +137,21 @@ class OnOffMixin(RFEntity):
             return
         self.hass.async_create_task(self._async_set(None))
 
+    def command_quiet_left(self) -> float:
+        """Seconds during which the meter is not believed after a command (0 when not checking it).
+
+        The lamp obeys at once but the meter shows it 2.5-4 s late: until the check has had its
+        turn, a reading says what the lamp did BEFORE the last command.
+        """
+        if not self.device["options"].get("light_retry"):
+            return 0.0
+        end = self.sent_at + self._retry_after + RETRY_SETTLE_MAX + 1
+        return max(0.0, end - self.hass.loop.time())
+
     @callback
     def _feedback_event(self, event: Event[EventStateChangedData]) -> None:
+        if self._pending is not None or self.command_quiet_left() > 0:
+            return  # the check after the last command owns the state until it has judged
         real = feedback_on(event.data["new_state"], self._threshold)
         if real is not None and real != self._attr_is_on:
             self._attr_is_on = real
@@ -299,7 +312,16 @@ class OnOffMixin(RFEntity):
                 if self._lamp_is_on(watts) == pending.target:
                     return  # as the last command left it
                 if pending.resends <= 0:
-                    return  # give up; the meter will correct the state
+                    # Tried enough: the lamp is what the meter says, and so is the entity.
+                    lit = self._lamp_is_on(watts)
+                    if lit != self._attr_is_on:
+                        _LOGGER.warning(
+                            "%s: the lamp is %s (%s W) and did not follow %s; showing it as it is",
+                            self.entity_id, "on" if lit else "off", watts, pending.role,
+                        )
+                        self._attr_is_on = lit
+                        self.async_write_ha_state()
+                    return
                 async with self._op_lock:
                     if self._pending is not pending:
                         return
