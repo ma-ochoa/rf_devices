@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/hacs/integration"><img src="https://img.shields.io/badge/HACS-Custom-41BDF5.svg" alt="HACS"></a>
-  <img src="https://img.shields.io/badge/Home%20Assistant-2026.5%2B-blue.svg" alt="Home Assistant 2026.5+">
+  <img src="https://img.shields.io/badge/Home%20Assistant-2026.11%2B-blue.svg" alt="Home Assistant 2026.11+">
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT">
 </p>
 
@@ -73,7 +73,8 @@ It has only been tested with the devices in the first column. The code is built 
 
 ## Requirements
 
-- Home Assistant **2026.5** or newer (tested on 2026.9).
+- Home Assistant **2026.11** or newer (tested on 2026.11). Since 2026.10.2 the core Broadlink integration uses the
+  `broadlink-async` library; RF Devices talks to it directly and no longer installs the `broadlink` package.
 - A transmitter, one of:
   - the core **Broadlink** integration with an RF-capable model. RF Devices sends through its
     `remote` entity and uses its connection to learn;
@@ -424,7 +425,7 @@ switch works through `generic.py`. To add vendor features:
 
 ```bash
 uv venv -p 3.14 .venv
-uv pip install -p .venv/bin/python pytest-homeassistant-custom-component broadlink==0.19.0 rf-protocols aioesphomeapi ruff
+uv pip install -p .venv/bin/python pytest-homeassistant-custom-component rf-protocols aioesphomeapi ruff
 .venv/bin/ruff check custom_components tests --select E,F,W,I,B,UP --ignore E501
 .venv/bin/pytest
 ```

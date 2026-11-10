@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-from broadlink.exceptions import ReadError
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -225,7 +225,8 @@ def _fake_broadlink(hass: HomeAssistant, api: MagicMock) -> None:
     assert ent.entity_id == TX
 
     async def request(func, *args):
-        return func(*args)
+        result = func(*args)
+        return await result if inspect.isawaitable(result) else result
 
     hass.data["broadlink"] = SimpleNamespace(
         devices={fake_entry.entry_id: SimpleNamespace(api=api, async_request=request)}
@@ -267,15 +268,16 @@ async def test_learn_with_known_frequency(hass: HomeAssistant, setup, hass_ws_cl
     assert ev["raw_analysis"]["frames"] == 13
 
 
-# Home Assistant 2026.11 moved the Broadlink integration to ``broadlink-async``: its exceptions are
-# not the ones of the ``broadlink`` package, they only share the names.
+# Stand-ins for the exceptions of ``broadlink-async``, the library of the core Broadlink integration
+# since Home Assistant 2026.10.2 (``broadlink_async.exceptions``): the tests do not need the library.
 class BroadlinkException(Exception):  # noqa: N818
     pass
 
 
 BroadlinkException.__module__ = "broadlink_async.exceptions"
-ForeignReadError = type("ReadError", (BroadlinkException,), {})
-ForeignTimeout = type("NetworkTimeoutError", (BroadlinkException,), {})
+ReadError = type("ReadError", (BroadlinkException,), {"__module__": "broadlink_async.exceptions"})
+NetworkTimeoutError = type("NetworkTimeoutError", (BroadlinkException,), {"__module__": "broadlink_async.exceptions"})
+ForeignReadError, ForeignTimeout = ReadError, NetworkTimeoutError
 
 
 async def test_learn_with_foreign_error_classes(hass: HomeAssistant, setup, hass_ws_client) -> None:
@@ -299,6 +301,44 @@ async def test_learn_with_foreign_error_classes(hass: HomeAssistant, setup, hass
     assert (await ws.receive_json()).get("success")
     stages, ev = await _stages(ws)
     assert stages == ["press", "captured"], ev
+
+
+async def test_learn_with_the_async_api(hass: HomeAssistant, setup, hass_ws_client) -> None:
+    """The whole flow against coroutines, like ``broadlink-async``: sweep, frequency, press, capture."""
+    from unittest.mock import AsyncMock
+
+    api = AsyncMock()
+    api.check_frequency.side_effect = [(False, 0.0), (True, 0.0)]  # an RM Pro+ finds it but reports 0
+    api.check_data.side_effect = [ReadError(-10, "Read error"), ReadError(-10, "Read error"),
+                                  codec.encode(codec.decode(capture(BITS_B)))]
+    api.hello.return_value = True
+    _fake_broadlink(hass, api)
+
+    ws = await hass_ws_client(hass)
+    await ws.send_json_auto_id({"type": "rf_devices/learn"})
+    assert (await ws.receive_json())["success"]
+    stages, ev = await _stages(ws)
+    assert stages == ["sweep", "frequency", "press", "captured"], ev
+    api.find_rf_packet.assert_awaited_once_with(None)
+    assert ev["analysis"]["good_frames"] >= 1
+
+
+async def test_health_probe_awaits_the_coroutines(hass: HomeAssistant, setup) -> None:
+    """``hello`` is a coroutine: it must be awaited (run in an executor it always "answered")."""
+    from unittest.mock import AsyncMock
+
+    tx = setup.entry.runtime_data.transmitter(TX)
+    api = AsyncMock()
+    api.hello.side_effect = NetworkTimeoutError(-4000, "timeout")
+    api.check_data.side_effect = NetworkTimeoutError(-4000, "timeout")
+    assert not await tx._async_alive(SimpleNamespace(api=api))  # both silent: not alive
+    api.hello.side_effect = None
+    api.hello.return_value = False
+    api.check_data.side_effect = ReadError(-10, "Read error")  # "nothing captured" is an answer
+    assert await tx._async_alive(SimpleNamespace(api=api))
+    api.hello.return_value = True
+    assert await tx._async_alive(SimpleNamespace(api=api))
+    api.hello.assert_awaited()
 
 
 async def test_learn_with_a_foreign_fatal_error_is_reported(hass: HomeAssistant, setup, hass_ws_client) -> None:
@@ -360,8 +400,6 @@ async def test_learn_press_timeout_exits_learning(hass: HomeAssistant, setup, ha
 
 
 async def test_learn_zero_frequency_and_unreachable(hass: HomeAssistant, setup, hass_ws_client) -> None:
-    from broadlink.exceptions import NetworkTimeoutError
-
     api = MagicMock()
     api.check_frequency.return_value = (True, 0.0)  # RM Pro+ behaviour
     api.check_data.side_effect = NetworkTimeoutError(-4000, "Network timeout")
@@ -386,10 +424,9 @@ async def test_learn_rejects_non_broadlink(hass: HomeAssistant, setup, hass_ws_c
 
 
 async def test_learn_refused_when_broadlink_silent(hass: HomeAssistant, setup, hass_ws_client) -> None:
-    from broadlink.exceptions import NetworkTimeoutError
-
     api = MagicMock()
     api.hello.side_effect = NetworkTimeoutError(-4000, "Network timeout")
+    api.check_data.side_effect = NetworkTimeoutError(-4000, "Network timeout")  # silent for both probes
     _fake_broadlink(hass, api)
 
     ws = await hass_ws_client(hass)
@@ -440,6 +477,7 @@ async def test_power_cycle_when_broadlink_hangs(hass: HomeAssistant, setup, monk
         return True
 
     api.hello.side_effect = hello
+    api.check_data.side_effect = OSError("no route")  # the second probe is silent too
     tx = setup.entry.runtime_data.transmitter(TX)
     await tx._async_after_learning(SimpleNamespace(api=api, async_request=_request))
     assert [c.data["entity_id"] for c in offs] == ["switch.plug"]
@@ -455,12 +493,11 @@ async def _no_sleep(_delay) -> None:
 
 
 async def _request(func, *args):
-    return func(*args)
+    result = func(*args)
+    return await result if inspect.isawaitable(result) else result
 
 
 async def test_learn_tolerates_a_busy_broadlink(hass: HomeAssistant, setup, hass_ws_client, monkeypatch) -> None:
-    from broadlink.exceptions import NetworkTimeoutError
-
     monkeypatch.setattr("custom_components.rf_devices.transmitters.remote.POLL_INTERVAL", 0.05)
     api = MagicMock()
     answers = [NetworkTimeoutError(-4000, "busy"), ReadError(-5, "no data"), NetworkTimeoutError(-4000, "busy"),

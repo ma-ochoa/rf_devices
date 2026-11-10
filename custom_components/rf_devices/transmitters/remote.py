@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections.abc import AsyncIterator
 
@@ -92,12 +93,32 @@ class RemoteTransmitter(Transmitter):
         return None
 
     async def _async_alive(self, device) -> bool:
-        """Ask the Broadlink to identify itself (a harmless discovery packet)."""
-        try:
-            await asyncio.wait_for(self.hass.async_add_executor_job(device.api.hello), HEALTH_TIMEOUT)
-        except Exception:  # noqa: BLE001 - any failure means "not answering"
-            return False
-        return True
+        """Ask the Broadlink to answer.
+
+        ``broadlink-async`` (the library of the core integration since 2026.10.2) has coroutines
+        for everything that reaches the device, so they are awaited; handing ``hello`` to an
+        executor, as before, only created a coroutine nobody ran and "answered" always. First a
+        ``hello``; if it says no or fails, a read of the last captured code, where even "nothing
+        captured" (ReadError, StorageError) proves the device is there.
+        """
+        api = device.api
+
+        async def probe(function):
+            result = function()
+            return await result if inspect.isawaitable(result) else result
+
+        for function in (getattr(api, "hello", None), api.check_data):
+            if function is None:
+                continue
+            try:
+                result = await asyncio.wait_for(probe(function), HEALTH_TIMEOUT)
+            except Exception as err:  # noqa: BLE001 - any failure means "no answer"
+                if _in_mro(err, "ReadError", "StorageError"):
+                    return True
+                continue
+            if result is not False:
+                return True
+        return False
 
     async def async_learn(self, frequency: float | None) -> AsyncIterator[LearnEvent]:
         """Learn one RF code with the Broadlink.

@@ -1,14 +1,23 @@
 # Changelog
 
-## 0.12.5
+## 0.13.0
 
-- Fixed: capturing a code with a Broadlink never finished on Home Assistant 2026.11. That release
-  moved the Broadlink integration to the `broadlink-async` library, whose exceptions are not the
-  ones of the `broadlink` package (same names, other classes). The "no code yet" answer of the
-  device (`ReadError`) was not recognised, so the first poll ended the capture with an error after
-  the sweep and the "press again" step. Errors are now recognised by name and by library family,
-  so both libraries work, and anything else that goes wrong is reported in the panel instead of
-  ending the capture silently.
+**Requires Home Assistant 2026.11 or newer.** Since 2026.10.2 the core Broadlink integration uses the
+`broadlink-async` library (every call that reaches the device is a coroutine, exceptions live in
+`broadlink_async.exceptions`). RF Devices is aligned with it and no longer installs the `broadlink` package.
+
+- Fixed: capturing a code with a Broadlink never finished. The "no code yet" answer of the device
+  (`ReadError`) is a class of the new library, not of the old package, so the first poll ended the
+  capture with an error after the sweep and the "press again" step. Errors are now recognised by name
+  and by library family, and anything else that goes wrong is reported in the panel instead of ending
+  the capture silently.
+- Fixed: the check that the Broadlink still answers (before and after a capture) handed the `hello`
+  coroutine to an executor, so nothing ran and it "answered" always (and a hung Broadlink was never
+  detected or power-cycled). It now awaits `hello`, and if that says no, reads the last captured code:
+  even "nothing captured" proves the device is there.
+- Changed: `hacs.json` asks for Home Assistant 2026.11.0, the `broadlink` requirement is gone from the
+  manifest (it shared a package directory with the one of the core integration) and the tests use the
+  library's exception names without installing it.
 
 ## 0.12.4
 
