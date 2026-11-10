@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.5
+
+- Fixed: capturing a code with a Broadlink never finished on Home Assistant 2026.11. That release
+  moved the Broadlink integration to the `broadlink-async` library, whose exceptions are not the
+  ones of the `broadlink` package (same names, other classes). The "no code yet" answer of the
+  device (`ReadError`) was not recognised, so the first poll ended the capture with an error after
+  the sweep and the "press again" step. Errors are now recognised by name and by library family,
+  so both libraries work, and anything else that goes wrong is reported in the panel instead of
+  ending the capture silently.
+
 ## 0.12.4
 
 - Fixed: after the relay powered up, a lamp that was lighting by itself could be switched off. The
