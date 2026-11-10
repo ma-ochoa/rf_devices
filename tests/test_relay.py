@@ -784,6 +784,28 @@ async def test_quick_on_then_off_is_not_resent(hass, hass_storage, monkeypatch) 
     assert not t.room.light and hass.states.get(LIGHT).state == "off"
 
 
+async def test_slow_starting_lamp_is_not_taken_for_a_missed_code(hass, hass_storage, monkeypatch) -> None:
+    """The lamp takes seconds to reach full power: judged half way up, it must not be resent.
+
+    Resending a toggle then switches a lamp that was lighting back off (the blink of 10/11).
+    """
+    t = await _retry_setup(hass, hass_storage, monkeypatch, light_retry=True,
+                           light_calibration={"idle": 0.0, "light": 37.0})
+    full = t.room.publish
+
+    def slow() -> None:
+        if t.room.light:
+            hass.states.async_set(METER, "9.0", {"unit_of_measurement": "W"})  # mid start-up
+            hass.loop.call_later(0.5, full)  # full power only after the check would have run
+        else:
+            full()
+
+    t.room.publish = slow
+    await call(hass, "light", "turn_on", LIGHT)
+    await _settle(hass, 0.8)
+    assert t.room.rf == ["light"] and t.room.light and hass.states.get(LIGHT).state == "on"
+
+
 async def test_state_is_shown_before_the_code_finishes_sending(hass, hass_storage, monkeypatch) -> None:
     """The transmitter takes ~0.5 s: the entity must not wait for it."""
     t = await _retry_setup(hass, hass_storage, monkeypatch)
