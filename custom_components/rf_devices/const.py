@@ -5,7 +5,7 @@ from __future__ import annotations
 from homeassistant.const import Platform
 
 DOMAIN = "rf_devices"
-VERSION = "0.13.0"
+VERSION = "0.13.1"
 MANUFACTURER = "RF Devices"
 
 STORAGE_KEY = DOMAIN

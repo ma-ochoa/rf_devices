@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.13.1
+
+- Fixed: flipping the wall switch (or asking for the light) every few seconds could leave the lamp
+  the opposite of what the last flip said. A Shelly Gen1 shows what the lamp did 2.5-4 s late
+  (the lamp itself obeys at once), and the check that resends a missed code looked at the meter
+  after 4 s, when it still showed the previous state, so it sent a toggle that flipped the lamp.
+  Now the state is the commands given (on then off is off) and the meter is ignored until
+  `light_retry_after` s after the LAST command (7 s by default, never less than 6 s). Only then it is
+  read, once it stops moving: if the lamp is as the last command left it, nothing is sent; if
+  not, the code is sent again. A late reading that happens to match no longer ends the check early.
+  Asking for the same state again still waits 4.5 s (it was 2.5 s) before judging.
+
 ## 0.13.0
 
 **Requires Home Assistant 2026.11 or newer.** Since 2026.10.2 the core Broadlink integration uses the

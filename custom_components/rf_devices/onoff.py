@@ -18,10 +18,14 @@ from .meter import Meter
 
 _LOGGER = logging.getLogger(__name__)
 
-RETRY_EVERY = 0.5  # s between meter readings while checking a light command
-RETRY_DEFAULT_AFTER = 4.0  # s for the lamp to show on the meter before resending
+RETRY_EVERY = 0.5  # s between two readings of the meter when judging
+# A Shelly Gen1 shows what the lamp did 2.5-4 s late (the lamp obeys within ~0.25 s). Until that
+# time has passed the meter cannot be trusted: the state is the commands, as given.
+RETRY_DEFAULT_AFTER = 7.0  # s after the LAST command before the meter is read and judged
+RETRY_SETTLE_FLOOR = 6.0  # no setting can make it shorter than the lag of the meter
+RETRY_SETTLE_MAX = 3.0  # s of readings to wait for a meter that is still moving
 RETRY_MIN_JUMP_W = 3.0  # a smaller change on the meter is not the lamp
-RETRY_MIN_SHOW = 2.5  # s a lamp needs to show a code on the meter; never resend sooner
+RETRY_MIN_SHOW = 4.5  # s after a code that someone asked for again, before judging it
 RETRY_MAX = 3  # resends left for one command (one automatic, one more per "again")
 RETRY_LAMP_FRACTION = 0.2  # a lamp is lit from this share of its draw: LED lamps start up slowly
 RETRY_MOVING_W = 0.5  # W between two readings 0.5 s apart: the meter is still moving, do not judge
@@ -221,7 +225,7 @@ class OnOffMixin(RFEntity):
     # --- check a command on the meter, resend if the lamp ignored it ------
     @property
     def _retry_after(self) -> float:
-        return float(self.device["options"].get("light_retry_after") or RETRY_DEFAULT_AFTER)
+        return max(float(self.device["options"].get("light_retry_after") or RETRY_DEFAULT_AFTER), RETRY_SETTLE_FLOOR)
 
     def _retry_meter(self) -> Meter | None:
         """The meter that shows this light, if resending a missed command is on."""
@@ -260,34 +264,40 @@ class OnOffMixin(RFEntity):
         if pending is not None and pending.task is not None and not pending.sending:
             pending.task.cancel()
 
-    async def _async_watch(self, pending: _Pending) -> None:
-        """Watch the meter after a command; resend it while the lamp has not moved.
+    async def _async_settled_reading(self, meter: Meter) -> float | None:
+        """A reading of the meter once it stops moving (a lamp starting up or fading), or None."""
+        previous = await meter.async_read()
+        for _ in range(max(1, int(RETRY_SETTLE_MAX / max(RETRY_EVERY, 0.001)))):
+            await asyncio.sleep(RETRY_EVERY)
+            watts = await meter.async_read()
+            if watts is None or previous is None or abs(watts - previous) <= RETRY_MOVING_W:
+                return watts
+            previous = watts
+        return None
 
-        An RF code is sometimes not received (distance, interference). Once
-        on its own after ``light_retry_after`` s, and once more each time
-        someone asks again (but never before the lamp had ``RETRY_MIN_SHOW`` s
-        to show the previous code, so two codes never cancel each other out).
+    async def _async_watch(self, pending: _Pending) -> None:
+        """Wait for the meter to catch up, then check the lamp is as the last command left it.
+
+        The lamp obeys at once but the meter shows it 2.5-4 s late, so until
+        ``light_retry_after`` s after the last command the state is simply the commands
+        given (the wall switch flipped on, then off: it is off) and the meter is ignored,
+        whatever it shows. Only then it is read once: lamp as asked, nothing to do; not as
+        asked, the code is sent again (a toggle code that was lost or heard twice).
         """
         loop = self.hass.loop
-        previous: float | None = None
         try:
             while self._pending is pending:
                 await asyncio.sleep(RETRY_EVERY)
                 if not self.powered or self.hub.calibrating or self._motor_busy():
                     return
-                watts = await pending.meter.async_read()
-                moving = watts is not None and previous is not None and abs(watts - previous) > RETRY_MOVING_W
-                previous = watts if watts is not None else previous
-                # Confirmed when the lamp is as it was asked to be. Not "it changed since
-                # before the command": with a toggle code, two quick commands (on, then
-                # off) change nothing on the meter, and resending would flip the lamp.
-                if watts is not None and self._lamp_is_on(watts) == pending.target:
-                    return
-                if moving:
-                    continue  # still starting up or fading: wait for it to settle before judging
-                wait = RETRY_MIN_SHOW if pending.urgent else self._retry_after
-                if loop.time() < pending.last_send + wait:
+                due = pending.last_send + (RETRY_MIN_SHOW if pending.urgent else self._retry_after)
+                if loop.time() < due:
                     continue
+                watts = await self._async_settled_reading(pending.meter)
+                if watts is None:
+                    continue  # no reading, or still moving: look again
+                if self._lamp_is_on(watts) == pending.target:
+                    return  # as the last command left it
                 if pending.resends <= 0:
                     return  # give up; the meter will correct the state
                 async with self._op_lock:
@@ -298,8 +308,8 @@ class OnOffMixin(RFEntity):
                     pending.sending = True
                     try:
                         _LOGGER.info(
-                            "%s: the lamp did not react (%s W); sending %s again",
-                            self.entity_id, pending.baseline, pending.role,
+                            "%s: the lamp is %s (%s W), not as asked; sending %s again",
+                            self.entity_id, "on" if self._lamp_is_on(watts) else "off", watts, pending.role,
                         )
                         self.sent_at = loop.time()
                         await self.async_send_role(pending.role)
