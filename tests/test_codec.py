@@ -4,7 +4,16 @@ import pytest
 
 from custom_components.rf_devices import codec
 
-from .helpers import BITS_A, BITS_B, capture, frame
+from .helpers import (
+    BITS_A,
+    BITS_B,
+    DATA_GAP,
+    PREAMBLE_GAP,
+    capture,
+    frame,
+    preamble,
+    two_part_capture,
+)
 
 
 def test_roundtrip() -> None:
@@ -148,3 +157,80 @@ def test_broadlink_app_codes_are_converted_by_cleaning() -> None:
     junk = _app_code(None)
     assert codec.problem(junk) == codec.PROBLEM_NOT_RF_IR
     assert codec.problem(codec.clean(junk)) == codec.PROBLEM_NOT_RF_IR
+
+
+def _parts(code: str) -> list[tuple[int, int | None]]:
+    return [(f.length, f.gap) for f in codec.split_frames(codec.decode(code).pulses)]
+
+
+def test_clean_keeps_the_preamble_of_a_two_part_remote() -> None:
+    """Reported with a curtain motor: each repetition is a preamble, a pause and the data.
+    Cleaning kept only the data and the motor ignored it."""
+    raw = two_part_capture(BITS_A)
+    data = len(frame(BITS_A))
+    a = codec.analyze(raw)
+    assert a["parts"] == 2
+    assert (a["frames"], a["good_frames"], a["bad_frames"]) == (9, 8, 1)  # repetitions, not parts
+    assert a["frame_map"][0] == {"pulses": 21, "ok": False}
+    assert a["frame_map"][1] == {"pulses": 17 + 1 + data, "ok": True}
+    assert a["bits"] == BITS_A + "0"  # the data, not the preamble
+    assert a["needs_cleaning"]
+
+    cleaned = codec.clean(raw, frames=4)
+    assert _parts(cleaned) == [(17, PREAMBLE_GAP), (data, DATA_GAP)] * 3 + [
+        (17, PREAMBLE_GAP),
+        (data, codec.TAIL_GAP_TICKS),
+    ]
+    frames = codec.split_frames(codec.decode(cleaned).pulses)
+    assert all(f.pulses == frame(BITS_A) for f in frames[1::2])
+    assert all(abs(p - q) <= 1 for f in frames[0::2] for p, q in zip(f.pulses, preamble(), strict=True))
+    c = codec.analyze(cleaned)
+    assert c["repeat"] == 0
+    assert (c["frames"], c["good_frames"], c["bad_frames"], c["parts"]) == (4, 4, 0, 2)
+    assert c["bits"] == a["bits"] and abs(c["frame_ms"] - a["frame_ms"]) <= 0.2
+    assert not c["needs_cleaning"]
+    assert codec.clean(cleaned, frames=4) == cleaned  # cleaning twice changes nothing
+
+    result = codec.capture_result(raw, 433.92)
+    assert result["code"] == cleaned
+    assert result["analysis"]["good_frames"] == codec.DEFAULT_FRAMES
+
+
+def test_two_part_remote_fingerprint_reclean_and_hold() -> None:
+    raw = two_part_capture(BITS_A)
+    cleaned = codec.clean(raw)
+    # The buttons share the preamble: the identity is the data.
+    assert codec.fingerprint(raw) == codec.fingerprint(cleaned)
+    assert codec.fingerprint(raw) == codec.fingerprint(two_part_capture(BITS_A, groups=3, truncated=False))
+    assert codec.fingerprint(raw) != codec.fingerprint(two_part_capture(BITS_B))
+    # Down to one repetition and back up: the preamble stays in front of the data.
+    one = codec.clean(cleaned, frames=1)
+    a = codec.analyze(one)
+    assert (a["frames"], a["good_frames"], a["parts"], a["needs_cleaning"]) == (1, 1, 2, False)
+    assert codec.fingerprint(one) == codec.fingerprint(raw)
+    back = _parts(codec.clean(one, frames=3))
+    assert [n for n, _ in back] == [17, len(frame(BITS_A))] * 3
+    assert back[0][1] == PREAMBLE_GAP and back[1][1] < codec.TAIL_GAP_TICKS
+    # Holding the button repeats whole groups.
+    held = codec.analyze(codec.hold(cleaned, 2))
+    assert held["parts"] == 2 and held["bad_frames"] == 0
+    assert held["good_frames"] <= codec.MAX_FRAMES_PER_PACKET
+    assert abs(held["sent_ms"] - 2000) <= a["frame_ms"] * (held["repeat"] + 1)
+
+
+def test_two_part_remote_with_a_missed_preamble() -> None:
+    """Two data frames in a row (a preamble was not received) do not make it a one-part remote."""
+    raw = two_part_capture(BITS_A, skip_preamble=2)
+    a = codec.analyze(raw)
+    assert a["parts"] == 2 and a["good_frames"] >= 5
+    cleaned = codec.clean(raw)
+    assert [n for n, _ in _parts(cleaned)] == [17, len(frame(BITS_A))] * 4
+    assert codec.fingerprint(cleaned) == codec.fingerprint(two_part_capture(BITS_A))
+
+
+def test_one_part_remotes_are_not_grouped() -> None:
+    for code in (capture(BITS_A), capture(BITS_A, frames=2, truncated=False), capture(BITS_A, frames=1)):
+        assert codec.analyze(code)["parts"] == 1
+    # Kept exactly as before: the first complete frames of the capture, untouched.
+    kept = codec.split_frames(codec.decode(codec.clean(capture(BITS_A))).pulses)
+    assert [f.pulses for f in kept] == [frame(BITS_A)] * 4

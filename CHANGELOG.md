@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.13.2
+
+- Fixed: a remote that sends each repetition in two parts (a preamble, a pause of a few ms, then
+  the data) stopped working once its capture was cleaned. Cleaning splits the capture at every
+  pause of 2.5 ms or more, so the preamble and the data were taken for different frames, the most
+  repeated one (the data) was kept and the preamble was dropped; the receiver ignores data that
+  comes without it. Seen with a curtain motor's 433 MHz remote. The repeated unit is now found by
+  the rhythm of the capture (the same sequence of frame lengths coming back), and cleaning keeps
+  whole groups, preamble first, with the pauses between their parts. Codes of such a remote that
+  were already cleaned hold only the data: learn those buttons again (or clean the raw capture
+  again if it was kept).
+- The analysis of such a code counts whole repetitions, not their parts ("8 frames, 1 incomplete"
+  instead of 17 frames), its length and wave show the whole group, and holding a button repeats
+  whole groups. The bits and the fingerprint are still those of the data part.
+- Remotes whose repetition is a single frame are analysed and cleaned exactly as before.
+
 ## 0.13.1
 
 - Fixed: flipping the wall switch (or asking for the light) every few seconds could leave the lamp
