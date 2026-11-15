@@ -28,3 +28,29 @@ def capture(bits: str, frames: int = 12, repeat: int = 1, truncated: bool = True
 
 BITS_A = "101100001111000010100101"
 BITS_B = "101100001111000010101010"
+
+PREAMBLE_GAP, DATA_GAP = 162, 105  # ticks: ~5.3 ms and ~3.4 ms, both long enough to split frames
+
+
+def preamble(jitter: int = 0) -> list[int]:
+    """Nine short pulses of nearly the same width: which read as "long" changes with the jitter."""
+    pulses = [12] * 17
+    for i in range(jitter % 17, 17, 5):
+        pulses[i] += 1
+    return pulses
+
+
+def two_part_capture(
+    bits: str, groups: int = 8, repeat: int = 2, truncated: bool = True, skip_preamble: int | None = None
+) -> str:
+    """A remote that sends [preamble, pause, data, pause] each time, held down."""
+    data = frame(bits)
+    pulses: list[int] = []
+    if truncated:
+        pulses += data[-21:] + [DATA_GAP]
+    for n in range(groups):
+        if n != skip_preamble:
+            pulses += preamble(n) + [PREAMBLE_GAP]
+        pulses += data + [DATA_GAP]
+    pulses[-1] = 1500
+    return codec.to_b64(codec.encode(codec.Packet(codec.TYPE_RF433, repeat, pulses)))
